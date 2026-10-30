@@ -21,7 +21,7 @@ Status: only `--help` and `--version` are implemented. Files marked "(planned)" 
 
 ## Validation
 
-Run in order: `npm run typecheck`, `npm test`, `npm pack --dry-run`. CI also runs `npm run lint`.
+Run in order: `npm run lint`, `npm run typecheck`, `npm test`, `npm pack --dry-run`. CI runs the same commands.
 
 ## Process
 
