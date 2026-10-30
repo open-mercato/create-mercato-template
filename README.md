@@ -30,11 +30,11 @@ npx create-mercato-template publish --from ../my-template --repo your-name/my-te
 4. **`describe`** prints the catalog entry (YAML) to list the template in [Open Mercato Modules](https://github.com/open-mercato/modules).
 5. **Create an app from it** with `npx create-mercato-app my-app --app-url https://github.com/your-name/my-template`, and later with `--template`.
 
-Every command takes `--json` for scripts and agents: one JSON object on stdout, no prompts, and stable exit codes (0 done, 1 a check failed, 2 usage error, 3 GitHub auth missing, 4 a GitHub step failed).
+Every command will take `--json` for scripts and agents: one JSON object on stdout, no prompts, and stable exit codes (0 done, 1 a check failed, 2 usage error, 3 GitHub auth missing, 4 a GitHub step failed).
 
 ## What is and is not saved
 
-A template is code only. It holds the committed files of your app at one commit. It never holds your database, uploaded files, `.env` files, Git history or registry credentials. A file that looks like a secret stops `prepare`; you move the value to `.env` and commit again.
+When `prepare` ships, a template will be code only. It will hold the committed files of your app at one commit. It will never hold your database, uploaded files, `.env` files, Git history or registry credentials. A file that looks like a secret will stop `prepare`; you move the value to `.env` and commit again.
 
 ## In an Open Mercato Cloud sandbox
 
