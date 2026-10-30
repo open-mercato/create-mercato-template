@@ -18,7 +18,7 @@ Pushes exactly the snapshot in `<dir>` as a one-commit GitHub template repositor
 
 ### `describe --from <dir>` (planned)
 
-Prints the catalog entry for the published template. Flags: `--repo <owner/name>`, `--use-case <value>`, `--summary <text>`, `--json`.
+Prints the catalog entry for the published template. Flags: `--repo <owner/name>`, `--use-case <value>`, `--summary <text>`, `--when-to-use <text>`, `--when-not-to-use <text>`, `--json`.
 
 ### Exit codes
 

@@ -48,6 +48,6 @@ jobs:
       - run: npm test
       - run: npm pack --dry-run
 
-  # Phase 2 Step 9 adds a release-checks job here: save an app with this tool,
+  # Phase 2 Step 11 adds a release-checks job here: save an app with this tool,
   # publish it to a local gh shim, create a new app from it with
   # create-mercato-app --app-url, then install, start and sign in. No secrets.

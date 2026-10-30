@@ -17,7 +17,7 @@ Status: only `--help` and `--version` are implemented. Files marked "(planned)" 
 | Publication | `src/publish.ts` (planned) | `verify` before auth, auth before any remote step. Explicit `--public`/`--private`. The commit is built locally before any remote change. Never force-push, never delete or rewrite a repository. `--resume` only on an empty repository or one made from this snapshot. |
 | Describe | `src/describe.ts` (planned) | Output validates against the catalog's `template-1.json`. No network. |
 | Unit tests | `test/*.test.cjs` | `node --test` against `dist/`; external commands are replaced with fake executors, local bare Git repositories or a `gh` shim. No test touches github.com or npmjs.com. Secret-looking fixtures are generated at test time, not committed. |
-| Release checks (save then import) | `test/release-e2e/README.md` (planned, Step 9) | Separate from unit tests; never creates real repositories or publishes packages. |
+| Release checks (save then import) | `test/release-e2e/README.md` (planned, Step 11) | Separate from unit tests; never creates real repositories or publishes packages. |
 
 ## Validation
 
