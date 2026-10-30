@@ -2,7 +2,7 @@ import js from '@eslint/js'
 import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
-  { ignores: ['dist/', 'node_modules/', '.agents/', '.claude/', '.mercato/'] },
+  { ignores: ['dist/', 'node_modules/', '.agents/', '.claude/'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
@@ -20,6 +20,7 @@ export default tseslint.config(
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
   {
+    // test/release-e2e/ arrives with the release checks in Phase 2 Step 11.
     files: ['test/release-e2e/**/*.{mts,mjs}', 'eslint.config.mjs'],
     languageOptions: { globals: { process: 'readonly', console: 'readonly', fetch: 'readonly', AbortSignal: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', URL: 'readonly', Response: 'readonly', Buffer: 'readonly' } },
   },

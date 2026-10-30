@@ -1,0 +1,12 @@
+{
+  // Typecheck only, for the release-time generators in scripts/*.mts (Phase 2
+  // Steps 2 and 6). src is included too, so the config has inputs before the
+  // first script lands and the generators are checked against the same types.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "declaration": false
+  },
+  "include": ["scripts/**/*.mts", "src/**/*.ts"]
+}

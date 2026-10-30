@@ -44,7 +44,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck
-      - run: npm run build
+      # npm test builds first, so there is no separate build step.
       - run: npm test
       - run: npm pack --dry-run
 
