@@ -1,0 +1,12 @@
+node_modules/
+*.tgz
+.env*
+.npmrc
+.codex/
+
+dist/
+
+# Agent pipeline run state
+.ai/qa/artifacts_*/
+.ai/qa/test-env.json
+.ai/qa/test-env.env
