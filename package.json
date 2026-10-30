@@ -1,0 +1,55 @@
+{
+  "name": "create-mercato-template",
+  "version": "0.0.0",
+  "description": "Save an Open Mercato app as a clean GitHub template repository.",
+  "homepage": "https://github.com/open-mercato/create-mercato-template#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/open-mercato/create-mercato-template.git"
+  },
+  "bugs": {
+    "url": "https://github.com/open-mercato/create-mercato-template/issues"
+  },
+  "keywords": [
+    "open-mercato",
+    "mercato",
+    "template",
+    "cli",
+    "github"
+  ],
+  "license": "MIT",
+  "bin": {
+    "create-mercato-template": "bin/cli.cjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "docs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "npm run build && node --test test/*.test.cjs",
+    "prepack": "npm run build",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "typescript": "6.0.3"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "^24.19.1",
+    "eslint": "10.12.0",
+    "typescript-eslint": "8.71.1"
+  }
+}

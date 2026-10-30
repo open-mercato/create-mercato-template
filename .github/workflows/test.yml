@@ -1,0 +1,52 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [24, 26]
+        npm: [bundled]
+        include:
+          # Users upgrade npm independently of Node, so test npm 12 next to
+          # the bundled version (same matrix as create-mercato-module).
+          - node: 24
+            npm: '12'
+    name: test (node ${{ matrix.node }}, npm ${{ matrix.npm }})
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - name: Install npm ${{ matrix.npm }}
+        if: matrix.npm != 'bundled'
+        env:
+          NPM_VERSION: ${{ matrix.npm }}
+        run: npm install --global "npm@$NPM_VERSION"
+      - run: npm --version
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+      - run: npm pack --dry-run
+
+  # Phase 2 Step 9 adds a release-checks job here: save an app with this tool,
+  # publish it to a local gh shim, create a new app from it with
+  # create-mercato-app --app-url, then install, start and sign in. No secrets.
