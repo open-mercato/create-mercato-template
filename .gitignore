@@ -1,6 +1,8 @@
 node_modules/
 *.tgz
 .env*
+# Stock and fixture .env.example files are committed (spec Steps 2 and 6).
+!.env.example
 .npmrc
 .codex/
 

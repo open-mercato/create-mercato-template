@@ -21,5 +21,7 @@ test('npm pack ships only the files entries of package.json', () => {
   assert.ok(files.includes('bin/cli.cjs'))
   assert.ok(files.includes('dist/cli.js'))
   assert.ok(files.includes('LICENSE'))
+  // src/ is not shipped, so a source map would point at missing files.
+  assert.deepEqual(files.filter((file) => file.endsWith('.map')), [])
   assert.deepEqual(files.filter((file) => !allowed.test(file)), [])
 })
