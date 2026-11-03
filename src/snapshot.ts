@@ -75,6 +75,31 @@ function errorCode(error: unknown): string | undefined {
 const missingCodes = ['ENOENT', 'ENOTDIR']
 
 /**
+ * Whether every parent directory of `relative` inside the app is a real
+ * directory: the same test as "realpath of the directory equals
+ * realpath(<app>) joined with it" (spec, Snapshot item 5), done with `lstat`
+ * per segment so a case-insensitive file system cannot make a plain string
+ * comparison fail. `missing` when a parent does not exist or is a file.
+ */
+function parentState(appReal: string, relative: string): 'ok' | 'missing' | 'symlink' {
+  const segments = relative.split('/').slice(0, -1)
+  let current = appReal
+  for (const segment of segments) {
+    current = path.join(current, segment)
+    let stat: fs.Stats
+    try {
+      stat = fs.lstatSync(current)
+    } catch (error) {
+      if (missingCodes.includes(errorCode(error) ?? '')) return 'missing'
+      throw error
+    }
+    if (stat.isSymbolicLink()) return 'symlink'
+    if (!stat.isDirectory()) return 'missing'
+  }
+  return 'ok'
+}
+
+/**
  * Reads one worktree file the safe way (spec, Snapshot item 5): the real path
  * of its directory must equal `realpath(<app>)` joined with the path's
  * directory, so no parent directory is a symlink; the file is opened once with
@@ -83,14 +108,8 @@ const missingCodes = ['ENOENT', 'ENOTDIR']
  * content never read.
  */
 export function readWorktreeFile(appReal: string, relative: string): WorktreeRead {
-  const directory = path.dirname(relative)
-  const expected = directory === '.' ? appReal : path.join(appReal, directory)
-  try {
-    if (fs.realpathSync(expected) !== expected) return { kind: 'symlink' }
-  } catch (error) {
-    if (missingCodes.includes(errorCode(error) ?? '')) return { kind: 'missing' }
-    throw error
-  }
+  const parents = parentState(appReal, relative)
+  if (parents !== 'ok') return { kind: parents }
   const full = path.join(appReal, relative)
   let stat: fs.Stats
   try {
@@ -121,10 +140,8 @@ export function readWorktreeFile(appReal: string, relative: string): WorktreeRea
 
 /** The target of a worktree symlink, read without following it, or null when the path is not a symlink in place. */
 function readWorktreeLink(appReal: string, relative: string): Buffer | null {
-  const directory = path.dirname(relative)
-  const expected = directory === '.' ? appReal : path.join(appReal, directory)
+  if (parentState(appReal, relative) !== 'ok') return null
   try {
-    if (fs.realpathSync(expected) !== expected) return null
     const full = path.join(appReal, relative)
     if (!fs.lstatSync(full).isSymbolicLink()) return null
     return fs.readlinkSync(full, { encoding: 'buffer' })
@@ -178,11 +195,17 @@ export function buildSnapshot(input: SnapshotInput): Snapshot {
   const treeKeys = new Set(tree.map((entry) => entry.path.toString('latin1')))
   const added = git.indexEntries().filter((entry) => !treeKeys.has(entry.path.toString('latin1')))
   const untracked = git.untrackedPaths()
-  const attributes = git.attributes(head, [
-    ...tree.map((entry) => entry.path),
-    ...added.map((entry) => entry.path),
-    ...untracked.map(stripTrailingSlash),
-  ])
+  const paths = [...tree.map((entry) => entry.path), ...added.map((entry) => entry.path), ...untracked.map(stripTrailingSlash)]
+  // `export-ignore` on a directory (`/tests export-ignore`, `docs/ export-ignore`)
+  // is not inherited by the files below it, so each parent directory is asked
+  // too, with a trailing slash so directory-only patterns match.
+  const directories = new Map<string, Buffer>()
+  for (const item of paths)
+    for (let slash = item.indexOf(0x2f); slash >= 0; slash = item.indexOf(0x2f, slash + 1)) {
+      const directory = item.subarray(0, slash + 1)
+      directories.set(directory.toString('latin1'), directory)
+    }
+  const attributes = git.attributes(head, [...paths, ...directories.values()])
 
   const findings: Finding[] = []
   const excluded = new Map<string, Set<string>>()
@@ -190,10 +213,16 @@ export function buildSnapshot(input: SnapshotInput): Snapshot {
   const candidates = new Map<string, Candidate>()
 
   const attributesOf = (item: Buffer) => attributes.get(item.toString('latin1')) ?? { exportIgnore: false, filter: null }
+  const exportIgnored = (item: Buffer): boolean => {
+    if (attributesOf(item).exportIgnore) return true
+    for (let slash = item.indexOf(0x2f); slash >= 0; slash = item.indexOf(0x2f, slash + 1))
+      if (attributesOf(item.subarray(0, slash + 1)).exportIgnore) return true
+    return false
+  }
   /** Records an excluded path and returns true, or returns false when the path is not excluded. */
   const exclude = (item: Buffer, record: boolean): boolean => {
     const shown = displayPath(item)
-    const pattern = deniedBy(shown) ?? (attributesOf(item).exportIgnore ? exportIgnorePattern : null)
+    const pattern = deniedBy(shown) ?? (exportIgnored(item) ? exportIgnorePattern : null)
     if (pattern === null) return false
     if (record) excluded.set(pattern, (excluded.get(pattern) ?? new Set()).add(shown))
     return true
@@ -267,6 +296,8 @@ export function buildSnapshot(input: SnapshotInput): Snapshot {
     if (!content) throw new Error(`Git returned no content for ${relative}.`)
     if (candidate.size !== undefined && candidate.size !== content.length)
       throw new Error(`Git returned ${content.length} bytes for ${relative}; the tree says ${candidate.size}.`)
+    if (candidate.oid && blobId(content, format) !== candidate.oid)
+      throw new Error(`Git returned other content for ${relative} than the pinned commit holds. Nothing was written.`)
     if (isLfsPointer(content, candidate.filter)) finding('lfs-pointer', relative)
     contents.set(relative, content)
     files.push({ path: relative, mode: candidate.mode, size: content.length, sha256: sha256Hex(content), origin: candidate.origin })

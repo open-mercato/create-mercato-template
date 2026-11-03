@@ -162,6 +162,48 @@ test('an export-ignore file is excluded and listed, never exported', () => {
   assert.equal(report.excluded.at(-1).pattern, 'export-ignore')
 })
 
+test('a directory marked export-ignore excludes every file below it', () => {
+  const app = createFixtureRepo({
+    '.gitattributes': '/internal export-ignore\ntests/ export-ignore\n',
+    'internal/notes.md': 'internal\n',
+    'internal/deep/more.md': 'internal\n',
+    'tests/a.test.ts': 'test\n',
+    'src/tests.ts': 'kept\n',
+  })
+  const { out, report } = run(app)
+  assert.deepEqual(excludedPaths(report, 'export-ignore'), ['internal/deep/more.md', 'internal/notes.md', 'tests/a.test.ts'])
+  assert.ok(treeFiles(out).includes('src/tests.ts'))
+  assert.ok(!treeFiles(out).some((item) => item.startsWith('internal/') || item.startsWith('tests/')))
+})
+
+test('a partial clone with missing blobs: nothing is fetched, no repo program runs, .git is unchanged', () => {
+  const source = createFixtureRepo({ 'src/a.ts': 'export const a = 1\n' })
+  git(source, ['config', 'uploadpack.allowFilter', 'true'])
+  git(source, ['config', 'uploadpack.allowAnySHA1InWant', 'true'])
+  const parent = tempDir('cmt-partial-')
+  git(parent, ['clone', '-q', '--no-checkout', '--filter=blob:none', `file://${source}`, 'app'])
+  const app = path.join(parent, 'app')
+  const marker = path.join(parent, 'marker')
+  const script = path.join(parent, 'upload-pack.sh')
+  fs.writeFileSync(script, `#!/bin/sh\ntouch '${marker}'\nexec git-upload-pack "$@"\n`, { mode: 0o755 })
+  git(app, ['config', 'remote.origin.uploadpack', script])
+  const before = hashTree(path.join(app, '.git'))
+  const out = newOut()
+  assert.throws(() => prepare({ app, out, environment: gitEnvironment() }), /not in the local repository|not allowed/)
+  assert.equal(fs.existsSync(marker), false, 'a program configured for the remote ran')
+  assert.deepEqual(hashTree(path.join(app, '.git')), before)
+  assert.equal(fs.existsSync(out), false)
+})
+
+test('replace refs do not change the exported bytes', () => {
+  const app = createFixtureRepo({ 'src/a.ts': 'export const a = 1\n' })
+  const original = git(app, ['rev-parse', 'HEAD:src/a.ts']).toString().trim()
+  const other = git(app, ['hash-object', '-w', '--stdin'], Buffer.from('export const a = 666\n')).toString().trim()
+  git(app, ['replace', original, other])
+  const { out } = run(app)
+  assert.equal(fs.readFileSync(path.join(out, 'tree/src/a.ts'), 'utf8'), 'export const a = 1\n')
+})
+
 // ---------------------------------------------------------------------------
 // Worktree changes
 // ---------------------------------------------------------------------------
@@ -284,6 +326,10 @@ test('a committed symlink is entry-symlink, its target never read', () => {
   assertError(app, ['entry-symlink link'])
 })
 
+// Spec Step 3 names "an untracked file under a directory symlink that points
+// outside the app". Git never lists files below a symlink: `ls-files --others`
+// lists the symlink itself, so that is the entry prepare sees and refuses. A
+// tracked file below a parent that became a symlink is the next test.
 test('an untracked symlink to a directory outside the app is entry-symlink, its content never read', () => {
   const outside = tempDir('cmt-outside-')
   fs.writeFileSync(path.join(outside, 'secret.txt'), 'outside\n')
@@ -436,6 +482,10 @@ test('--out reached through a symlink into the app is inside the app (realpath, 
   assertCliError(() => prepare({ app: path.join(links, 'app-link'), out: path.join(app, 'out') }), 2, 'usage')
   assert.equal(fs.existsSync(path.join(app, 'src', 'out')), false)
   assert.deepEqual(fs.readdirSync(path.join(app, 'build')), [])
+  // A dangling symlink to a missing directory of the app.
+  fs.symlinkSync(path.join(app, 'snap'), path.join(links, 'dangling'))
+  assertCliError(() => prepare({ app, out: path.join(links, 'dangling') }), 2, 'usage')
+  assert.equal(fs.existsSync(path.join(app, 'snap')), false)
   // A sibling whose name starts like the app is not inside it.
   assert.equal(checkOut(`${app}-out`, app), `${app}-out`)
 })

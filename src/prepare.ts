@@ -131,6 +131,12 @@ export function isInside(outer: string, inner: string): boolean {
  */
 export function checkOut(out: string, appReal: string): string {
   const absolute = path.resolve(out)
+  let link: fs.Stats | null = null
+  try {
+    link = fs.lstatSync(absolute)
+  } catch {}
+  if (link?.isSymbolicLink() && !fs.existsSync(absolute))
+    throw usage(`--out ${out} is a symlink to a missing directory. Choose a new directory. Nothing was written.`)
   if (isInside(appReal, realpathOfNearestExisting(absolute)))
     throw usage(`--out ${out} is inside the app (${appReal}). Choose a directory outside the app. Nothing was written.`)
   let stat: fs.Stats

@@ -127,10 +127,28 @@ export const safeGitConfig = [
   'core.untrackedCache=false',
 ] as const
 
+/**
+ * The environment of every snapshot read. On top of `gitEnvironment`:
+ * - no lazy fetch in a partial clone (`GIT_NO_LAZY_FETCH`, Git 2.44 and
+ *   newer), and no transport protocol at all (`GIT_ALLOW_PROTOCOL` set to a
+ *   name no transport has, for older Git), so a missing object is never
+ *   downloaded, nothing is written to `.git/objects` and no program the
+ *   repository configures for a remote (`uploadpack`, `sshCommand`, a
+ *   credential helper) runs;
+ * - no replace refs (`GIT_NO_REPLACE_OBJECTS`), so the bytes read are the
+ *   pinned commit's own;
+ * - no terminal prompt.
+ */
 export function snapshotGitEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const environment = gitEnvironment(base)
   for (const name of redirectingVariables) delete environment[name]
-  return environment
+  return {
+    ...environment,
+    GIT_NO_LAZY_FETCH: '1',
+    GIT_ALLOW_PROTOCOL: 'none',
+    GIT_NO_REPLACE_OBJECTS: '1',
+    GIT_TERMINAL_PROMPT: '0',
+  }
 }
 
 export type TreeEntry = {
@@ -259,6 +277,10 @@ export class GitReader {
       const newline = output.indexOf(0x0a, offset)
       if (newline < 0) throw new Error('git cat-file printed a truncated answer.')
       const header = output.subarray(offset, newline).toString('utf8').split(' ')
+      if (header[0] === oid && header[1] === 'missing')
+        throw new Error(
+          `Blob ${oid} of the pinned commit is not in the local repository (a partial clone?). prepare never downloads objects: fetch them first (for example git fetch --refetch, or a full clone), then retry. Nothing was written.`,
+        )
       if (header[0] !== oid || header[1] !== 'blob' || header.length !== 3)
         throw new Error(`git cat-file could not read blob ${oid}.`)
       const size = Number(header[2])
