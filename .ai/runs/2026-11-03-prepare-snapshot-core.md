@@ -49,3 +49,4 @@ PR: #4
 
 - [x] 3.1 docs/guide.md, CHANGELOG.md, AGENTS.md and the spec review note : 90c4f72
 - [x] Post-review fix: no lazy fetch, transports or replace refs; export-ignore directories; dangling --out symlink; per-segment parent check; test notes : 00261df
+- [x] Post-review fix: --out below a dangling symlink is a usage error : 50e50fb
