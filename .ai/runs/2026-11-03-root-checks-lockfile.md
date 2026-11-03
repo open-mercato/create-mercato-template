@@ -26,8 +26,9 @@ Ship Step 4 of the spec's Implementation Plan: the root rules of the rule table 
 - A `yarn.lock` that cannot be read as a Yarn 2+ lockfile (YAML error, no `__metadata`, an entry without `version` or `resolution`) is `root-yarn-lock`, with a message saying why, as `root-package-json` covers an unreadable `package.json`.
 - `root-not-om-app` checks `dependencies` only: an app needs core at run time.
 - `root-om-mixed-lines` considers every lockfile entry named `@open-mercato/*` resolved from npm (`npm:` or `patch:`), so transitive packages count; workspace and link entries do not.
-- `openMercato` is the core entry found by the `package.json` descriptor, else the only entry for the name, else the highest version.
+- `openMercato` is the registry core entry found by the `package.json` descriptor (by name only when there is no usable range or `resolutions` overrides it); null for a `link:`, workspace or aliased core.
 - With no `yarn.lock`, `root-om-unresolved` and `root-om-mixed-lines` are not reported (one cause, one finding).
+- After review: `root-om-mixed-lines` counts only the framework set (core plus every `@open-mercato/*` name linked to it through lockfile dependency edges), because `@open-mercato/client` and `@open-mercato/cezar` ship on their own lines; the spec row is clarified with a review note. A range given in `package.json` must itself be in `yarn.lock`, except for names `resolutions` overrides.
 
 ## Risks
 
@@ -52,3 +53,4 @@ PR: #5
 ### Phase 3: Docs
 
 - [x] 3.1 docs/guide.md, CHANGELOG.md and AGENTS.md : 926daa6
+- [x] Post-review fix: mixed lines count only the framework set; exact descriptor lookup (stale lockfile); lockfile parse errors, aliases and size bound; openMercato only from a registry core; messages; spec rule row and review note : e1c0bd0
