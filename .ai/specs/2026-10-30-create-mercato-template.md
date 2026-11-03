@@ -613,7 +613,7 @@ Version `0.1.0`, `CHANGELOG.md`, README with the three commands and the sandbox 
 - Review of 2026-10-30 (spec and repo review against catalog rev 6, om-modules main 001fb48) applied in this revision.
 - Second review of 2026-10-30, before the first push, applied too: `main` is pushed before this spec (Step 0); `prepare` stays off the CLI until Step 8; the release waits for the published catalog schemas and the inventory contract test; `--resume` records the remote commit; a failed repo read is exit 4; the prompt refusal, the `publish` rules and the exit 4 shape are in the rule table; the precedence rule, the shim list, the stock table workflow, the commit author and the credential URL hint are corrected.
 - The catalog spec puts every `verify` refusal (a changed, added or missing file, `--expect`, report errors) under rule `snapshot-modified`, next to its own `repo-name-exists` and `repo-not-from-snapshot`. This spec keeps that rule and adds a `reason` field rather than new rule names for those refusals. `visibility-mismatch` and `publish-declined` are new rules for refusals the catalog does not name.
-- Not done yet: the scope-cohesion review by a fresh-context reviewer that `om-spec-writing` asks for. Run it before Step 1.
+- The scope-cohesion review by a fresh-context reviewer that `om-spec-writing` asks for was done in PR #2; findings 10 and 11 of that review are left for Steps 8 and 3.
 
 ### Catalog amendments requested
 
