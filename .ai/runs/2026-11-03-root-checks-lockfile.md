@@ -36,17 +36,19 @@ Ship Step 4 of the spec's Implementation Plan: the root rules of the rule table 
 
 ## Progress
 
+PR: #5
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` : <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Code
 
-- [ ] 1.1 yaml dependency and the lockfile reader
-- [ ] 1.2 Root checks and the report fields in prepare()
+- [x] 1.1 yaml dependency and the lockfile reader : bed6d4c
+- [x] 1.2 Root checks and the report fields in prepare() : 4da6545
 
 ### Phase 2: Tests
 
-- [ ] 2.1 Step 4 tests and lockfile unit tests
+- [x] 2.1 Step 4 tests and lockfile unit tests : c8ae94b
 
 ### Phase 3: Docs
 
-- [ ] 3.1 docs/guide.md, CHANGELOG.md and AGENTS.md
+- [x] 3.1 docs/guide.md, CHANGELOG.md and AGENTS.md : 926daa6
