@@ -76,3 +76,37 @@ export function safeCommandOutput(output: string, environment?: NodeJS.ProcessEn
   sanitized = sanitized.trim()
   return sanitized.length > 3000 ? `…\n${sanitized.slice(-3000)}` : sanitized
 }
+
+export type BytesResult = { status: number | null; stdout: Buffer; stderr: string }
+
+export type BytesOptions = { input?: Buffer; env?: NodeJS.ProcessEnv }
+
+/**
+ * Runs a command with an argument array, never through a shell, and returns
+ * stdout as raw bytes. Git prints paths as bytes (`-z` output), and a path
+ * that is not valid UTF-8 must reach the `unsafe-path` rule unchanged, so the
+ * snapshot reads cannot use the UTF-8 `run`. Same capture timeout as `run`;
+ * a larger buffer, because `cat-file --batch` returns every blob at once.
+ */
+export type BytesExecutor = (command: string, args: string[], cwd: string, options?: BytesOptions) => BytesResult
+
+const bytesBuffer = 1024 * 1024 * 1024
+
+export const runBytes: BytesExecutor = (command, args, cwd, options = {}) => {
+  const result = spawnSync(command, args, {
+    cwd,
+    env: options.env,
+    input: options.input,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: captureTimeout,
+    maxBuffer: bytesBuffer,
+  })
+  if (result.error) {
+    if ('code' in result.error && result.error.code === 'ETIMEDOUT')
+      throw new Error(`${command} ${args[0] ?? ''} did not finish in time.`, { cause: result.error })
+    throw new Error(`Cannot run ${command}: ${safeCommandOutput(result.error.message, options.env)}`, {
+      cause: result.error,
+    })
+  }
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr.toString('utf8') }
+}
