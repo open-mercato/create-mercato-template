@@ -21,7 +21,7 @@ Every command checks its arguments before it does anything else. A usage error e
 - both `--public` and `--private`;
 - a second app directory for `prepare`, or any positional argument for `publish` and `describe`.
 
-A flag that takes a value always takes the next argument, even when it starts with `-`. Write the value as a separate argument: `--out dir`, not `--out=dir`. Required flags and the checks on flag values (for example the `--use-case` list) come with each command.
+A flag that takes a value always takes the next argument, even when it starts with `-`. Write the value as a separate argument: `--out dir`, not `--out=dir`. The end-of-options marker `--` is not supported; write an app directory that starts with `-` as `./<name>`. Required flags and the checks on flag values (for example the `--use-case` list) come with each command.
 
 ### `--json`
 
@@ -38,9 +38,9 @@ With `--json` after a command, stdout carries exactly one JSON object and nothin
 }
 ```
 
-- `command` is `prepare`, `publish` or `describe`, or `null` when the command line names none (`--json` alone, an unknown command).
+- `command` is `prepare`, `publish` or `describe`, or `null` when the command line does not start with one (`--json` alone, an unknown command, `--json prepare`). The command always comes first.
 - `ok` is true exactly when `exitCode` is 0, and then `failures` is empty.
-- Each failure has a `rule`. Today the rules are `usage` (exit 2), `internal` (exit 1, an error the tool did not expect; its message is redacted like command output, and no stack trace is printed) and the Git rules below. Each command adds its own fields when it ships.
+- Each failure has a `rule`. Today the rules are `usage` (exit 2), `internal` (exit 1, an error the tool did not expect; its message is redacted like command output, email addresses included, and no stack trace is printed) and the Git rules below. Each command adds its own fields when it ships.
 
 Without `--json`, an error prints one message on stderr and nothing on stdout.
 

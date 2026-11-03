@@ -146,8 +146,12 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       if (!spec) {
         const [name] = argument.split('=', 1)
         problem(
-          flags[name]
+          argument === '--'
+            ? 'The end-of-options marker -- is not supported. Write an app directory that starts with - as ./<name>.'
+            : flags[name]?.value
             ? `Write ${name} and its value as two arguments: ${name} <value>.`
+            : flags[name]
+            ? `${name} takes no value.`
             : command
               ? `Unknown option for ${command}: ${argument}.`
               : `Unknown option: ${argument}.`,
@@ -184,7 +188,9 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       problem(
         index === 0
           ? `Unknown command: ${argument}. Choose prepare, publish or describe.`
-          : `Unexpected argument: ${argument}.`,
+          : isCommand(argument)
+            ? `Put the command first: npx create-mercato-template ${argument} [options].`
+            : `Unexpected argument: ${argument}.`,
       )
       continue
     }
@@ -256,6 +262,14 @@ const defaultIo: Io = {
   stderr: (text) => process.stderr.write(text),
 }
 
+/**
+ * Redacts an unexpected error message like command output, and also removes
+ * email addresses: no output field may carry one (spec, "--json shape").
+ */
+export function redact(message: string): string {
+  return safeCommandOutput(message).replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g, '[EMAIL]')
+}
+
 const failureCodes: readonly number[] = [exitCodes.check, exitCodes.usage, exitCodes.githubAuth, exitCodes.githubStep]
 
 /**
@@ -290,7 +304,7 @@ export async function main(
     const exitCode: ExitCode = known ? error.exitCode : exitCodes.check
     const failure: Failure = known
       ? error.failure
-      : { rule: 'internal', message: safeCommandOutput(error instanceof Error ? error.message : String(error)) }
+      : { rule: 'internal', message: redact(error instanceof Error ? error.message : String(error)) }
     if (parsed?.json)
       io.stdout(`${JSON.stringify(envelope(parsed.command, exitCode, [failure]), null, 2)}\n`)
     else io.stderr(`\nError: ${failure.message ?? failure.rule}\n`)

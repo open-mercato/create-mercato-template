@@ -3,6 +3,8 @@
 // imported: its dist/ exports are not a supported API. One change: when the
 // command cannot start or times out, the thrown Error keeps the spawn error as
 // `cause`, so callers can tell a missing binary (`ENOENT`) from other failures.
+// `safeCommandOutput` is exported (upstream keeps it private) so the CLI can
+// redact unexpected error messages the same way.
 import type { SpawnSyncOptionsWithStringEncoding, SpawnSyncReturns } from 'node:child_process'
 import { spawnSync } from 'node:child_process'
 

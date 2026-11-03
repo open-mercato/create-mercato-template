@@ -129,6 +129,8 @@ const usageCases = [
   ['--version with other arguments', ['--version', 'prepare'], /--version works only on its own/, null],
   ['a command flag with no command', ['--out', 'dir'], /--out needs a command first: prepare/, null],
   ['unknown option with no command', ['--bogus'], /Unknown option: --bogus/, null],
+  ['value on a boolean flag', ['publish', '--resume=yes'], /--resume takes no value/, 'publish'],
+  ['end-of-options marker', ['prepare', '--', 'app'], /end-of-options marker -- is not supported/, 'prepare'],
 ]
 
 test('usage errors exit 2 with a message on stderr and nothing on stdout', () => {
@@ -172,6 +174,15 @@ test('--json without a command is a usage error with one envelope and command nu
   assert.match(value.failures[0].message, /No command given/)
 })
 
+test('a command after --json is refused with a hint to put it first', () => {
+  const result = cli('--json', 'publish')
+  assert.equal(result.status, 2)
+  assert.equal(result.stderr, '')
+  const value = oneEnvelope(result.stdout)
+  assert.equal(value.command, null)
+  assert.match(value.failures[0].message, /Put the command first: npx create-mercato-template publish/)
+})
+
 test('the first usage problem on the command line is the one reported', () => {
   assert.match(parseArgs(['prepare', '--bogus', '--repo', 'x']).error, /--bogus/)
   assert.match(parseArgs(['publish', '--public', '--private', '--expect']).error, /--expect needs a value/)
@@ -200,6 +211,23 @@ test('a thrown non-CliError gives exactly one JSON object with rule internal and
   })
   assert.equal(thrownString.code, 1)
   assert.equal(oneEnvelope(thrownString.stdout).failures[0].rule, 'internal')
+})
+
+test('the internal message is redacted: tokens and email addresses never reach the output', async () => {
+  // Built at test time so no secret-looking value is committed.
+  const token = ['ghp', 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8'].join('_')
+  const email = ['jane.doe', 'example.org'].join('@')
+  for (const json of [true, false]) {
+    const result = await capture(json ? ['prepare', '--json'] : ['prepare'], async () => {
+      throw new Error(`git failed for ${email} with ${token}`)
+    })
+    assert.equal(result.code, 1)
+    const output = result.stdout + result.stderr
+    assert.ok(!output.includes(token), 'token leaked')
+    assert.ok(!output.includes(email), 'email leaked')
+    assert.match(output, /\[REDACTED\]/)
+    assert.match(output, /\[EMAIL\]/)
+  }
 })
 
 test('without --json an unexpected error prints one message on stderr and exits 1', async () => {
