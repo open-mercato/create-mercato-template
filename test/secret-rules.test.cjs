@@ -120,6 +120,10 @@ test('the rule build fails when a required id is removed from the input TOML', a
   assert.throws(() => buildSecretRules(withoutRule(fixtureToml, 'slack-webhook-url'), []), /slack-webhook-url/)
   // Skipping a required rule does not get around the check.
   assert.throws(() => buildSecretRules(fixtureToml, [{ id: 'github-pat', reason: 'test' }]), /lists github-pat, which converts/)
+  // Skipping a required rule that cannot be converted does not get around the check either.
+  const unconvertibleRequired = smallConfig().replace("regex = '''github-pat-[a-z]{8}'''", "regex = '''ghp_\\pL{36}'''")
+  assert.throws(() => buildSecretRules(unconvertibleRequired, []), /github-pat regex: the escape \\p has no translation/)
+  assert.throws(() => buildSecretRules(unconvertibleRequired, [{ id: 'github-pat', reason: 'test' }]), /Required rule\(s\) missing[^\n]*github-pat/)
   assert.ok(buildSecretRules(smallConfig(), []).rules.length === requiredIds.length)
 })
 
