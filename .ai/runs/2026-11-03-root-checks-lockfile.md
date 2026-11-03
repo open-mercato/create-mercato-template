@@ -54,3 +54,4 @@ PR: #5
 
 - [x] 3.1 docs/guide.md, CHANGELOG.md and AGENTS.md : 926daa6
 - [x] Post-review fix: mixed lines count only the framework set; exact descriptor lookup (stale lockfile); lockfile parse errors, aliases and size bound; openMercato only from a registry core; messages; spec rule row and review note : e1c0bd0
+- [x] Post-review fix: no range in findings (credential in URL ranges), git and URL ranges by name, framework packages on core's line : ede088f
