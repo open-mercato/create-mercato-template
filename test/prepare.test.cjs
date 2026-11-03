@@ -485,6 +485,7 @@ test('--out reached through a symlink into the app is inside the app (realpath, 
   // A dangling symlink to a missing directory of the app.
   fs.symlinkSync(path.join(app, 'snap'), path.join(links, 'dangling'))
   assertCliError(() => prepare({ app, out: path.join(links, 'dangling') }), 2, 'usage')
+  assertCliError(() => prepare({ app, out: path.join(links, 'dangling', 'sub') }), 2, 'usage')
   assert.equal(fs.existsSync(path.join(app, 'snap')), false)
   // A sibling whose name starts like the app is not inside it.
   assert.equal(checkOut(`${app}-out`, app), `${app}-out`)

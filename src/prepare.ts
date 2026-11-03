@@ -108,11 +108,23 @@ export function realpathOfNearestExisting(target: string): string {
       return path.join(fs.realpathSync(current), ...rest.reverse())
     } catch (error) {
       if (!['ENOENT', 'ENOTDIR'].includes(errorCode(error) ?? '')) throw error
+      // A path that exists but does not resolve is a dangling symlink: where
+      // it would lead cannot be judged, so it is refused.
+      if (fs.existsSync(current) || isSymlink(current))
+        throw usage(`--out ${target} goes through a symlink to a missing directory (${current}). Choose a new directory. Nothing was written.`)
       const parent = path.dirname(current)
       if (parent === current) throw error
       rest.push(path.basename(current))
       current = parent
     }
+  }
+}
+
+function isSymlink(target: string): boolean {
+  try {
+    return fs.lstatSync(target).isSymbolicLink()
+  } catch {
+    return false
   }
 }
 
