@@ -6,6 +6,10 @@
   "compilerOptions": {
     "rootDir": ".",
     "noEmit": true,
+    // The generator runs with Node's type stripping and imports src/*.ts by
+    // their real names.
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true,
     "declaration": false
   },
   "include": ["scripts/**/*.mts", "src/**/*.ts"]
