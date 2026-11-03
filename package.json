@@ -37,6 +37,7 @@
     "lint": "eslint .",
     "test": "npm run build && node --test test/*.test.cjs",
     "stock-table": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/build-stock-table.mts",
+    "secret-rules": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/build-secret-rules.mts",
     "prepack": "npm run build",
     "prepare": "npm run build"
   },

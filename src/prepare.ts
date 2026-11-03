@@ -19,12 +19,14 @@ import {
   sortFindings,
   writeOut,
 } from './snapshot.js'
+import { type RulesSummary, rulesSummary } from './rules/gitleaks.js'
 import { matchStock } from './stock.js'
 
 export type { Finding } from './policy/entries.js'
 export type { Excluded, FileRecord, Uncommitted } from './snapshot.js'
 export type { OpenMercato } from './policy/root.js'
 export type { Manifest, ReportModule } from './manifest.js'
+export type { RulesSummary } from './rules/gitleaks.js'
 
 /**
  * The internal entry point of `prepare` (spec Step 3). The CLI command keeps
@@ -52,7 +54,8 @@ export type Notice = { code: string; detail?: string }
 /** `report.json`, schema 1. Later spec steps add the other catalog fields. */
 export type Report = {
   schema: 1
-  tool: { name: string; version: string }
+  /** `rules`: the bundled gitleaks rules: their source tag and sha256, the rule count and the ids left out with their reasons. */
+  tool: { name: string; version: string; rules: RulesSummary }
   createdAt: string
   source: { head: string | null; dirty: boolean; includeUncommitted: boolean }
   /** The stock entry matched by the pinned core version; `known: false` when the table lacks it. */
@@ -271,7 +274,7 @@ export function prepare(options: PrepareOptions): PrepareResult {
 
   const report: Report = {
     schema: 1,
-    tool: { name: 'create-mercato-template', version: toolVersion() },
+    tool: { name: 'create-mercato-template', version: toolVersion(), rules: rulesSummary() },
     createdAt: now().toISOString(),
     source: { head: base.head, dirty: snapshot.uncommitted.length > 0, includeUncommitted },
     stock: stockOf(root?.openMercato ?? null),
