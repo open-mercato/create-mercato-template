@@ -25,7 +25,7 @@ export const maxDescriptionLength = 350
  * (the rule of `create-mercato-module`'s `describe.ts`).
  */
 // eslint-disable-next-line no-control-regex
-const notPlainText = /https?:\/\/|www\.|[[\]`<>]|(?:^|\s)\*|^\s*#|[\u0000-\u001f\u007f-\u009f–—]/i
+const notPlainText = /https?:\/\/|www\.|[[\]`<>]|(?:^|\s)\*|^\s*#|[\u0000-\u001f\u007f-\u009f\u2013\u2014]/i
 
 export type ManifestModule = { id: string; from: string; package?: string; when?: string }
 

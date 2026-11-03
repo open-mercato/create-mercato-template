@@ -555,7 +555,7 @@ test('manifest-name: a scoped slug loses its scope; any other name falls back to
 })
 
 test('manifest-description: not plain text or missing, the description is left out with a warning', () => {
-  for (const description of ['See https://example.com for more.', '**Bold** claims', 'A long — dash', undefined, 'x'.repeat(351)]) {
+  for (const description of ['See https://example.com for more.', '**Bold** claims', 'A long \u2014 dash', undefined, 'x'.repeat(351)]) {
     const { out, report } = run(createFixtureRepo(withPackages({}, { description })))
     const manifest = readManifest(out)
     assert.equal(manifest.description, undefined, String(description))
