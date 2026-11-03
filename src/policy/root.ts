@@ -9,7 +9,9 @@
 import {
   type Lockfile,
   LockfileError,
+  descriptorName,
   entriesNamed,
+  frameworkNames,
   isRegistryEntry,
   parseLockfile,
   resolveDependency,
@@ -67,6 +69,24 @@ function omDependencies(packageJson: Json): Array<{ name: string; range: string 
   return [...seen].map(([name, range]) => ({ name, range }))
 }
 
+/**
+ * The package names `package.json` `resolutions` overrides (`name`,
+ * `name@range`, `parent/name`): Yarn may record those under another
+ * descriptor, so they are looked up by name only.
+ */
+function resolutionNames(packageJson: Json | null): Set<string> {
+  const names = new Set<string>()
+  if (packageJson === null || !isObject(packageJson.resolutions)) return names
+  for (const key of Object.keys(packageJson.resolutions)) {
+    // The overridden package is the last name in the key: `b`, `a/b`, `@s/a/@s/b`, `a@1/b@2`.
+    const parts = key.split('/')
+    const last = parts.at(-1) ?? key
+    const previous = parts.at(-2)
+    names.add(descriptorName(previous?.startsWith('@') ? `${previous}/${last}` : last))
+  }
+  return names
+}
+
 function stringRecord(value: unknown): Record<string, string> | null {
   if (!isObject(value)) return null
   return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
@@ -105,7 +125,9 @@ export function checkRoot(contents: ReadonlyMap<string, Buffer>): RootResult {
       error(
         'root-package-json',
         'package.json',
-        contents.has('package.json') ? 'The root package.json is not a JSON object.' : 'The pinned commit has no root package.json.',
+        contents.has('package.json')
+          ? 'The root package.json is not a JSON object.'
+          : 'The snapshot has no root package.json: it is not in the commit, or it is not a regular file, or export-ignore left it out.',
       ),
     )
   } else {
@@ -134,7 +156,7 @@ export function checkRoot(contents: ReadonlyMap<string, Buffer>): RootResult {
   const lockContent = contents.get('yarn.lock')
   let lockfile: Lockfile | null = null
   if (!lockContent) {
-    findings.push(error('root-yarn-lock', 'yarn.lock', 'The pinned commit has no root yarn.lock. Run yarn install in the app and commit yarn.lock.'))
+    findings.push(error('root-yarn-lock', 'yarn.lock', 'The snapshot has no root yarn.lock: it is not in the commit, or it is not a regular file, or export-ignore left it out. Run yarn install in the app and commit yarn.lock.'))
   } else {
     try {
       lockfile = parseLockfile(lockContent)
@@ -147,16 +169,29 @@ export function checkRoot(contents: ReadonlyMap<string, Buffer>): RootResult {
   }
   if (lockfile === null) return result
 
+  const overridden = resolutionNames(packageJson)
+  const rangeOf = (name: string, range: string | null) => (overridden.has(name) ? null : range)
   if (packageJson !== null)
-    for (const dependency of omDependencies(packageJson))
-      if (resolveDependency(lockfile, dependency.name, dependency.range) === null)
-        findings.push(
-          error('root-om-unresolved', 'package.json', `${dependency.name} has no entry in yarn.lock. Run yarn install and commit yarn.lock.`),
-        )
+    for (const dependency of omDependencies(packageJson)) {
+      if (resolveDependency(lockfile, dependency.name, rangeOf(dependency.name, dependency.range)) !== null) continue
+      const known = entriesNamed(lockfile, dependency.name).length > 0
+      findings.push(
+        error(
+          'root-om-unresolved',
+          'package.json',
+          known
+            ? `${dependency.name}@${dependency.range} has no entry in yarn.lock: yarn.lock is out of date. Run yarn install and commit yarn.lock.`
+            : `${dependency.name} has no entry in yarn.lock. Run yarn install and commit yarn.lock.`,
+        ),
+      )
+    }
 
+  // Only the framework's lockstep set counts: a package released on its own
+  // line (such as @open-mercato/client) is not a mixed line.
+  const framework = frameworkNames(lockfile, scope, corePackage)
   const lines = new Map<string, Set<string>>()
   for (const entry of lockfile.entries) {
-    if (!entry.name.startsWith(scope) || !isRegistryEntry(entry)) continue
+    if (!framework.has(entry.name) || !isRegistryEntry(entry)) continue
     const line = versionLine(entry.version)
     if (line !== null) lines.set(line, (lines.get(line) ?? new Set()).add(entry.name))
   }
@@ -165,14 +200,17 @@ export function checkRoot(contents: ReadonlyMap<string, Buffer>): RootResult {
       error(
         'root-om-mixed-lines',
         'yarn.lock',
-        `Resolved @open-mercato packages span ${lines.size} lines (${[...lines.keys()].sort().join(', ')}). Align every @open-mercato dependency on one major.minor line.`,
+        `Resolved @open-mercato framework packages span ${lines.size} lines (${[...lines.keys()].sort().join(', ')}). Align every @open-mercato framework dependency on one major.minor line.`,
       ),
     )
 
   const coreRange = packageJson !== null && isObject(packageJson.dependencies) ? packageJson.dependencies[corePackage] : undefined
-  const core = resolveDependency(lockfile, corePackage, typeof coreRange === 'string' ? coreRange : null)
+  const core = resolveDependency(lockfile, corePackage, rangeOf(corePackage, typeof coreRange === 'string' ? coreRange : null))
+  // Only a registry entry that really is @open-mercato/core names the version:
+  // not a link: or workspace: core, and not an npm alias to another package.
   const coreLine = core ? versionLine(core.version) : null
-  if (core && coreLine !== null) result.openMercato = { version: core.version, line: coreLine }
+  if (core && coreLine !== null && isRegistryEntry(core) && descriptorName(core.resolution) === corePackage)
+    result.openMercato = { version: core.version, line: coreLine }
   result.enterprise.dependency = entriesNamed(lockfile, enterprisePackage).length > 0
   return result
 }

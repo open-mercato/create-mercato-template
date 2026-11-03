@@ -10,6 +10,8 @@ const { prepare } = require('../dist/prepare.js')
 const {
   LockfileError,
   compareVersions,
+  frameworkNames,
+  maxLockfileBytes,
   descriptorName,
   lockDescriptor,
   parseLockfile,
@@ -34,6 +36,15 @@ function packageJson(changes) {
 
 function lockEntry(name, version, extra = '') {
   return `\n"${name}@npm:${version}":\n  version: ${version}\n  resolution: "${name}@npm:${version}"\n  checksum: 10c0/${'1'.repeat(128)}\n  languageName: node\n  linkType: hard\n${extra}`
+}
+
+/** The fixture yarn.lock with the core entry depending on `dependencies` (name to version), as a real core entry does. */
+function coreDependingOn(dependencies) {
+  const block = Object.entries(dependencies).map(([name, version]) => `    "${name}": "npm:${version}"\n`).join('')
+  return fixtureFiles['yarn.lock'].replace(
+    `  resolution: "@open-mercato/core@npm:${coreVersion}"\n`,
+    `  resolution: "@open-mercato/core@npm:${coreVersion}"\n  dependencies:\n${block}`,
+  )
 }
 
 function errorRules(report) {
@@ -63,21 +74,49 @@ test('the Step 3 fixture app passes the root checks and fills the report fields'
 })
 
 test('a mixed-line lockfile: root-om-mixed-lines', () => {
+  // Core 0.9.0 depends on shared 0.9.0, and the app pins shared 0.8.2 too.
   const app = createFixtureRepo({
     'package.json': packageJson({ dependencies: { '@open-mercato/core': coreVersion, '@open-mercato/shared': '0.8.2' } }),
-    'yarn.lock': fixtureFiles['yarn.lock'] + lockEntry('@open-mercato/shared', '0.8.2'),
+    'yarn.lock':
+      coreDependingOn({ '@open-mercato/shared': coreVersion }) +
+      lockEntry('@open-mercato/shared', coreVersion) +
+      lockEntry('@open-mercato/shared', '0.8.2'),
   })
   const outcome = run(app)
   assertErrors(outcome, ['root-om-mixed-lines yarn.lock'])
   assert.match(outcome.report.findings[0].message, /0\.8, 0\.9/)
 })
 
-test('a transitive @open-mercato package on another line is mixed too; workspace entries are not', () => {
-  const workspace = `\n"@open-mercato/local@workspace:packages/local":\n  version: 0.0.0-use.local\n  resolution: "@open-mercato/local@workspace:packages/local"\n  languageName: unknown\n  linkType: soft\n`
-  const app = createFixtureRepo({ 'yarn.lock': fixtureFiles['yarn.lock'] + workspace + lockEntry('@open-mercato/shared', '0.10.0') })
+test('a transitive framework package on another line is mixed too; workspace entries are not', () => {
+  const workspace = `\n"@open-mercato/local@workspace:packages/local":\n  version: 0.0.0-use.local\n  resolution: "@open-mercato/local@workspace:packages/local"\n  dependencies:\n    "@open-mercato/core": "npm:${coreVersion}"\n  languageName: unknown\n  linkType: soft\n`
+  const shared = `  dependencies:\n    "@open-mercato/cache": "npm:0.10.0"\n`
+  const app = createFixtureRepo({
+    'yarn.lock':
+      coreDependingOn({ '@open-mercato/shared': coreVersion }) +
+      workspace +
+      lockEntry('@open-mercato/shared', coreVersion, '').replace('  checksum', `${shared}  checksum`) +
+      lockEntry('@open-mercato/cache', '0.10.0'),
+  })
   assertErrors(run(app), ['root-om-mixed-lines yarn.lock'])
   const onlyWorkspace = createFixtureRepo({ 'yarn.lock': fixtureFiles['yarn.lock'] + workspace })
   assert.deepEqual(run(onlyWorkspace).report.findings, [])
+})
+
+test('an @open-mercato package released on its own line is not a mixed line', () => {
+  const app = createFixtureRepo({
+    'package.json': packageJson({
+      dependencies: { '@open-mercato/core': coreVersion, '@open-mercato/client': '^0.3.5' },
+      devDependencies: { '@open-mercato/readiness-scanner': '0.1.0' },
+    }),
+    'yarn.lock':
+      coreDependingOn({ '@open-mercato/shared': coreVersion }) +
+      lockEntry('@open-mercato/shared', coreVersion) +
+      lockEntry('@open-mercato/client', '0.3.5').replace('"@open-mercato/client@npm:0.3.5":', '"@open-mercato/client@npm:^0.3.5":') +
+      lockEntry('@open-mercato/readiness-scanner', '0.1.0'),
+  })
+  const { result, report } = run(app)
+  assert.deepEqual(report.findings, [])
+  assert.equal(result.exitCode, 0)
 })
 
 test('a missing yarn.lock: root-yarn-lock, and no unresolved finding on top', () => {
@@ -161,6 +200,59 @@ test('an @open-mercato dependency or dev dependency with no lockfile entry: root
   assert.deepEqual(noCore.report.stock, { version: null, known: false })
 })
 
+test('a stale lockfile (package.json asks for a version yarn.lock lacks): root-om-unresolved, no openMercato', () => {
+  const app = createFixtureRepo({ 'package.json': packageJson({ dependencies: { '@open-mercato/core': '0.9.1' } }) })
+  const outcome = run(app)
+  assertErrors(outcome, ['root-om-unresolved package.json'])
+  assert.match(outcome.report.findings[0].message, /out of date/)
+  assert.equal(outcome.report.openMercato, null)
+})
+
+test('a dependency that package.json resolutions overrides is looked up by name', () => {
+  const app = createFixtureRepo({
+    'package.json': packageJson({ dependencies: { '@open-mercato/core': '^0.9.0' }, resolutions: { '@open-mercato/core': coreVersion } }),
+  })
+  const { report } = run(app)
+  assert.deepEqual(report.findings, [])
+  assert.deepEqual(report.openMercato, { version: coreVersion, line: '0.9' })
+})
+
+test('a link: core or an npm alias to another package does not name the Open Mercato version', () => {
+  const linked = `\n"@open-mercato/core@link:../om/packages/core::locator=fixture-app%40workspace%3A.":\n  version: 0.0.0-use.local\n  resolution: "@open-mercato/core@link:../om/packages/core::locator=fixture-app%40workspace%3A."\n  languageName: node\n  linkType: soft\n`
+  const linkApp = createFixtureRepo({
+    'package.json': packageJson({ dependencies: { '@open-mercato/core': 'link:../om/packages/core' } }),
+    'yarn.lock': fixtureFiles['yarn.lock'].split('\n"@open-mercato/core')[0] + linked,
+  })
+  const link = run(linkApp).report
+  assert.deepEqual(link.findings, [])
+  assert.equal(link.openMercato, null)
+  const aliasApp = createFixtureRepo({
+    'package.json': packageJson({ dependencies: { '@open-mercato/core': 'npm:@acme/core-fork@3.1.0' } }),
+    'yarn.lock':
+      fixtureFiles['yarn.lock'].split('\n"@open-mercato/core')[0] +
+      `\n"@open-mercato/core@npm:@acme/core-fork@3.1.0":\n  version: 3.1.0\n  resolution: "@acme/core-fork@npm:3.1.0"\n  languageName: node\n  linkType: hard\n`,
+  })
+  assert.equal(run(aliasApp).report.openMercato, null)
+})
+
+test('a yarn.lock with YAML aliases (an alias bomb) is root-yarn-lock, not a crash', () => {
+  const rows = ['__metadata:', '  version: 8', 'a0: &a0 [x, x, x, x, x, x, x, x, x, x]']
+  for (let index = 1; index < 9; index += 1) rows.push(`a${index}: &a${index} [${Array(10).fill(`*a${index - 1}`).join(', ')}]`)
+  const outcome = run(createFixtureRepo({ 'yarn.lock': `${rows.join('\n')}\n` }))
+  assertErrors(outcome, ['root-yarn-lock yarn.lock'])
+  assert.match(outcome.report.findings[0].message, /aliases/)
+})
+
+test('a yarn.lock over the size bound is root-yarn-lock without parsing', () => {
+  const huge = Buffer.alloc(maxLockfileBytes + 1, 0x20)
+  assert.throws(() => parseLockfile(huge), (error) => error instanceof LockfileError && /larger than 16 MB/.test(error.message))
+})
+
+test('a Yarn 4.17 lockfile (__metadata version 10) passes', () => {
+  const app = createFixtureRepo({ 'yarn.lock': fixtureFiles['yarn.lock'].replace('version: 8\n', 'version: 10\n') })
+  assert.deepEqual(run(app).report.findings, [])
+})
+
 test('enterprise.dependency is true when yarn.lock resolves @open-mercato/enterprise; it never blocks', () => {
   const app = createFixtureRepo({
     'package.json': packageJson({ dependencies: { '@open-mercato/core': coreVersion, '@open-mercato/enterprise': coreVersion } }),
@@ -224,6 +316,7 @@ test('parseLockfile: failsafe strings, joined descriptors, patch resolutions, me
     name: 'left-pad',
     version: '1.10.0',
     resolution: 'left-pad@npm:1.10.0',
+    dependencies: [],
   })
   assert.equal(lockfile.entries[1].name, '@scope/pkg')
   assert.equal(resolveDependency(lockfile, 'left-pad', '^1.10.0').version, '1.10.0')
@@ -241,13 +334,22 @@ test('parseLockfile refuses Yarn 1, YAML errors, duplicate keys and entries with
   assert.throws(() => parseLockfile('- a\n'), LockfileError)
 })
 
-test('resolveDependency: descriptor first, then the only entry, then the highest version', () => {
+test('resolveDependency: the descriptor when a range is given, else the only entry or the highest version', () => {
   const lockfile = parseLockfile(
-    `__metadata:\n  version: 8\n"x@npm:^1.0.0":\n  version: 1.2.0\n  resolution: "x@npm:1.2.0"\n"x@npm:^2.0.0":\n  version: 2.0.0-rc.1\n  resolution: "x@npm:2.0.0-rc.1"\n"x@npm:1.10.0":\n  version: 1.10.0\n  resolution: "x@npm:1.10.0"\n`,
+    `__metadata:\n  version: 8\n"x@npm:^1.0.0":\n  version: 1.2.0\n  resolution: "x@npm:1.2.0"\n"x@npm:^2.0.0":\n  version: 2.0.0-rc.1\n  resolution: "x@npm:2.0.0-rc.1"\n"x@npm:1.10.0":\n  version: 1.10.0\n  resolution: "x@npm:1.10.0"\n"y@patch:y@npm%3A1.0.0#./p.patch::locator=app%40workspace%3A.":\n  version: 1.0.0\n  resolution: "y@patch:y@npm%3A1.0.0#./p.patch::version=1.0.0&hash=abc"\n`,
   )
   assert.equal(resolveDependency(lockfile, 'x', '^1.0.0').version, '1.2.0')
-  assert.equal(resolveDependency(lockfile, 'x', 'github:a/b').version, '2.0.0-rc.1')
+  assert.equal(resolveDependency(lockfile, 'x', '^3.0.0'), null)
+  assert.equal(resolveDependency(lockfile, 'x', 'github:a/b'), null)
   assert.equal(resolveDependency(lockfile, 'x', null).version, '2.0.0-rc.1')
+  assert.equal(resolveDependency(lockfile, 'y', 'patch:y@npm%3A1.0.0#./p.patch').version, '1.0.0')
+})
+
+test('frameworkNames: core and every @open-mercato name linked to it, in either direction', () => {
+  const lockfile = parseLockfile(
+    `__metadata:\n  version: 8\n"@o/core@npm:1.0.0":\n  version: 1.0.0\n  resolution: "@o/core@npm:1.0.0"\n  dependencies:\n    "@o/shared": "npm:1.0.0"\n"@o/shared@npm:1.0.0":\n  version: 1.0.0\n  resolution: "@o/shared@npm:1.0.0"\n  dependencies:\n    "@o/cache": "npm:1.0.0"\n"@o/cache@npm:1.0.0":\n  version: 1.0.0\n  resolution: "@o/cache@npm:1.0.0"\n"@o/search@npm:1.0.0":\n  version: 1.0.0\n  resolution: "@o/search@npm:1.0.0"\n  peerDependencies:\n    "@o/core": "*"\n"@o/client@npm:0.3.0":\n  version: 0.3.0\n  resolution: "@o/client@npm:0.3.0"\n`,
+  )
+  assert.deepEqual([...frameworkNames(lockfile, '@o/', '@o/core')].sort(), ['@o/cache', '@o/core', '@o/search', '@o/shared'])
 })
 
 test('descriptor helpers, version lines and comparison', () => {
