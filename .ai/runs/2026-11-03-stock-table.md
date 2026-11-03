@@ -39,4 +39,4 @@ PR: #3
 ### Phase 2: Docs
 
 - [x] 2.1 docs/guide.md, CHANGELOG.md, AGENTS.md and the spec review note : c1acb30
-- [x] Post-review fix: linear credential URL scan, unclosed ${ fallback, upper-case commented keys, sorted URLs in the serializer, npm 11 pack shape test, test cleanup, doc wording : PENDING
+- [x] Post-review fix: linear credential URL scan, unclosed ${ fallback, upper-case commented keys, sorted URLs in the serializer, npm 11 pack shape test, test cleanup, doc wording : ee3a46e
