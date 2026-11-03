@@ -13,14 +13,18 @@ export type CredentialUrl = {
 }
 
 // The userinfo runs to the first `@` and holds no whitespace, `/`, `?`, `#` or quote.
-// The URL ends at whitespace, a quote, a backtick or an angle bracket.
-const candidate = /[A-Za-z][A-Za-z0-9+.-]*:\/\/([^\s/?#@'"`<>]+)@[^\s'"`<>]*/g
+// The URL ends at whitespace, a quote, a backtick or an angle bracket. The
+// lookbehind starts the scheme only at a word start, so a long run of letters
+// or digits is scanned once, not once per position.
+const candidate = /(?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*:\/\/([^\s/?#@'"`<>]+)@[^\s'"`<>]*/g
 const trailing = /[.,;)\]]+$/
 
 /**
  * Splits userinfo at the first `:` that is not inside a `${...}` reference, so
  * `${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}` gives the second
- * reference as the password. Returns null when there is no password separator.
+ * reference as the password. An unclosed `${` falls back to the first `:`, so
+ * a typo cannot hide a literal password. Returns null when there is no
+ * password separator.
  */
 function passwordOf(userinfo: string): string | null {
   let depth = 0
@@ -35,6 +39,10 @@ function passwordOf(userinfo: string): string | null {
       return userinfo.slice(index + 1)
     }
   }
+  if (depth > 0) {
+    const colon = userinfo.indexOf(':')
+    if (colon !== -1) return userinfo.slice(colon + 1)
+  }
   return null
 }
 
@@ -43,6 +51,7 @@ export function findCredentialUrls(text: string): CredentialUrl[] {
   const result: CredentialUrl[] = []
   const lines = text.split(/\r?\n/)
   for (let index = 0; index < lines.length; index += 1) {
+    if (!lines[index].includes('://')) continue
     for (const match of lines[index].matchAll(candidate)) {
       const password = passwordOf(match[1])
       if (!password) continue

@@ -53,7 +53,8 @@ function packVersion(version: string, directory: string, executor: Executor): st
     directory,
     { capture: true },
   )
-  // npm 11 prints `npm pack --json` as an array; npm 12 as an object keyed by package name.
+  // npm 11 prints `npm pack --json` as an array; npm 12 as an object keyed by
+  // package name (the shapes test/pack.test.cjs already reads on CI's npm 12 leg).
   const parsed: unknown = JSON.parse(result.stdout)
   const entries = Array.isArray(parsed) ? parsed : parsed && typeof parsed === 'object' ? Object.values(parsed) : []
   const filename = entries.length === 1 ? (entries[0] as { filename?: unknown } | null)?.filename : undefined
@@ -168,14 +169,19 @@ export function serializeStockTable(table: StockTable): string {
       Object.fromEntries(
         Object.entries(table.versions).map(([version, entry]) => [
           version,
-          { envExample: entry.envExample, env: sortedObject(entry.env), credentialUrls: entry.credentialUrls, readme: entry.readme },
+          {
+            envExample: entry.envExample,
+            env: sortedObject(entry.env),
+            credentialUrls: [...entry.credentialUrls].sort(),
+            readme: entry.readme,
+          },
         ]),
       ),
       compareStableVersions,
     ),
   }
   const json = JSON.stringify(ordered, null, 2).replace(
-    /[\u007f-￿]/g,
+    /[\u007f-\uffff]/g,
     (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`,
   )
   return `${json}\n`

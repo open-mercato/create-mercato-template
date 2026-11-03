@@ -139,11 +139,12 @@ test('the committed table is the generator output: sorted, ASCII only, never han
 })
 
 test('parseEnvAssignments reads active and commented assignments with their lines', () => {
-  const text = ['# A comment', 'FOO=bar', '# BAZ=', '#QUX = no', 'export NAME="quoted value"  ', '', '# e.g. X=1', 'BAD-KEY=1'].join('\n')
+  const text = ['# A comment', 'FOO=bar', '# BAZ=', '#QUX = no', 'export NAME="quoted value"  ', '', '# e.g. X=1', 'BAD-KEY=1', '# note=hello', 'lower_case=1'].join('\n')
   assert.deepEqual(parseEnvAssignments(text), [
     { key: 'FOO', value: 'bar', commented: false, line: 2 },
     { key: 'BAZ', value: '', commented: true, line: 3 },
     { key: 'NAME', value: '"quoted value"', commented: false, line: 5 },
+    { key: 'lower_case', value: '1', commented: false, line: 10 },
   ])
 })
 
@@ -156,6 +157,7 @@ test('findCredentialUrls finds URLs with a non-empty password, ${...} references
     'EMPTY_PASSWORD=postgres://postgres:@localhost/db',
     'see https://example.com/path@handle and https://example.com/?u=a:b@c',
     'call (https://user:pass@example.com).',
+    'TYPO=postgres://${DB_USER:secret@db/app',
   ].join('\n')
   assert.deepEqual(
     findCredentialUrls(text).map(({ url, password, line }) => ({ url, password, line })),
@@ -167,8 +169,19 @@ test('findCredentialUrls finds URLs with a non-empty password, ${...} references
         line: 2,
       },
       { url: 'https://user:pass@example.com', password: 'pass', line: 7 },
+      // An unclosed ${ falls back to the first colon, so the password still shows.
+      { url: 'postgres://${DB_USER:secret@db/app', password: 'secret', line: 8 },
     ],
   )
+})
+
+test('findCredentialUrls scans a long line in linear time', () => {
+  for (const line of ['a'.repeat(200_000) + '://', 'f0'.repeat(100_000), `${'x'.repeat(100_000)} postgres://u:p@h/db`]) {
+    const started = process.hrtime.bigint()
+    findCredentialUrls(line)
+    assert.ok(process.hrtime.bigint() - started < 1_000_000_000n, `took too long on a ${line.length}-character line`)
+  }
+  assert.deepEqual(findCredentialUrls(`${'x'.repeat(100_000)} postgres://u:p@h/db`).map(({ url }) => url), ['postgres://u:p@h/db'])
 })
 
 // A create-mercato-app tarball built from a few local files, as npm would ship it.
@@ -197,6 +210,7 @@ test('the generator, run on a local fixture tarball through a fake executor, add
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'cmt-stock-test-'))
   const tarball = fixtureTarball(work, '0.9.1')
   const calls = []
+  let packs = 0
   const executor = (command, args, cwd, options) => {
     calls.push([command, ...args])
     if (command === 'npm' && args[0] === 'view') {
@@ -206,54 +220,66 @@ test('the generator, run on a local fixture tarball through a fake executor, add
     if (command === 'npm' && args[0] === 'pack') {
       const destination = args[args.indexOf('--pack-destination') + 1]
       fs.copyFileSync(tarball, path.join(destination, path.basename(tarball)))
-      // npm 12 shape: an object keyed by package name.
-      const stdout = JSON.stringify({ 'create-mercato-app': { filename: path.basename(tarball) } })
+      // npm 12 prints an object keyed by package name, npm 11 an array; take turns.
+      const entry = { filename: path.basename(tarball) }
+      packs += 1
+      const stdout = JSON.stringify(packs % 2 ? { 'create-mercato-app': entry } : [entry])
       return { status: 0, stdout, stderr: '', pid: 0, output: [], signal: null }
     }
     if (command === 'tar') return run(command, args, cwd, options)
     throw new Error(`unexpected command ${command} ${args.join(' ')}`)
   }
   const before = JSON.parse(fs.readFileSync(tablePath, 'utf8'))
-  const { table, added } = updateStockTable(before, { executor, workRoot: work })
+  try {
+    const { table, added } = updateStockTable(before, { executor, workRoot: work })
 
-  assert.deepEqual(added, ['0.9.1'])
-  assert.deepEqual(
-    calls.filter(([command]) => command === 'npm'),
-    [
-      ['npm', 'view', 'create-mercato-app', 'versions', '--json'],
-      ['npm', 'pack', 'create-mercato-app@0.9.1', '--pack-destination', calls[1][4], '--json', '--ignore-scripts'],
-    ],
-  )
-  // The versions already in the table are kept as they are.
-  for (const version of stockVersions()) assert.deepEqual(table.versions[version], before.versions[version])
-  for (const [hash, content] of Object.entries(before.files)) assert.equal(table.files[hash], content)
-  assert.deepEqual(Object.keys(table.versions), [...stockVersions(), '0.9.1'])
+    assert.deepEqual(added, ['0.9.1'])
+    assert.deepEqual(
+      calls.filter(([command]) => command === 'npm'),
+      [
+        ['npm', 'view', 'create-mercato-app', 'versions', '--json'],
+        ['npm', 'pack', 'create-mercato-app@0.9.1', '--pack-destination', calls[1][4], '--json', '--ignore-scripts'],
+      ],
+    )
+    // The versions already in the table are kept as they are.
+    for (const version of stockVersions()) assert.deepEqual(table.versions[version], before.versions[version])
+    for (const [hash, content] of Object.entries(before.files)) assert.equal(table.files[hash], content)
+    assert.deepEqual(Object.keys(table.versions), [...stockVersions(), '0.9.1'])
 
-  const entry = table.versions['0.9.1']
-  assert.deepEqual(entry.env, {
-    DATABASE_URL: ['postgres://app:stock-pw@localhost:5432/app'],
-    JWT_SECRET: ['change-me', 'other-stock'],
-    REDIS_URL: ['redis://localhost:6379'],
-  })
-  assert.deepEqual(entry.credentialUrls, [
-    'postgres://${DB_USER:-app}:${DB_PASSWORD:-app}@db:5432/app',
-    'postgres://app:stock-pw@localhost:5432/app',
-  ])
-  assert.match(table.files[entry.envExample], /^# Stock\n/)
-  assert.equal(entry.readme, require('node:crypto').createHash('sha256').update('# Stock README\n').digest('hex'))
-  assert.equal(isStockReadme(entry.readme, table), true)
-  assert.equal(matchStock('0.9.1', table).known, true)
+    const entry = table.versions['0.9.1']
+    assert.deepEqual(entry.env, {
+      DATABASE_URL: ['postgres://app:stock-pw@localhost:5432/app'],
+      JWT_SECRET: ['change-me', 'other-stock'],
+      REDIS_URL: ['redis://localhost:6379'],
+    })
+    assert.deepEqual(entry.credentialUrls, [
+      'postgres://${DB_USER:-app}:${DB_PASSWORD:-app}@db:5432/app',
+      'postgres://app:stock-pw@localhost:5432/app',
+    ])
+    assert.match(table.files[entry.envExample], /^# Stock\n/)
+    assert.equal(entry.readme, require('node:crypto').createHash('sha256').update('# Stock README\n').digest('hex'))
+    assert.equal(isStockReadme(entry.readme, table), true)
+    assert.equal(matchStock('0.9.1', table).known, true)
 
-  // The serialized table orders 0.9.1 after 0.9.0, and work directories are removed.
-  assert.ok(serializeStockTable(table).indexOf('"0.9.1"') > serializeStockTable(table).indexOf('"0.9.0"'))
-  assert.deepEqual(fs.readdirSync(work).filter((name) => name.startsWith('cmt-stock-')), [])
+    // The serialized table orders 0.9.1 after 0.9.0, and work directories are removed.
+    assert.ok(serializeStockTable(table).indexOf('"0.9.1"') > serializeStockTable(table).indexOf('"0.9.0"'))
+    assert.deepEqual(fs.readdirSync(work).filter((name) => name.startsWith('cmt-stock-')), [])
 
-  // A second run with nothing missing fetches nothing.
-  calls.length = 0
-  const again = updateStockTable(table, { executor, workRoot: work })
-  assert.deepEqual(again.added, [])
-  assert.deepEqual(calls, [['npm', 'view', 'create-mercato-app', 'versions', '--json']])
-  fs.rmSync(work, { recursive: true, force: true })
+    // A second run with nothing missing fetches nothing.
+    calls.length = 0
+    const again = updateStockTable(table, { executor, workRoot: work })
+    assert.deepEqual(again.added, [])
+    assert.deepEqual(calls, [['npm', 'view', 'create-mercato-app', 'versions', '--json']])
+
+    // The npm 11 array shape is read the same way.
+    delete table.versions['0.9.1']
+    const array = updateStockTable(table, { executor, workRoot: work })
+    assert.equal(packs, 2)
+    assert.deepEqual(array.added, ['0.9.1'])
+    assert.deepEqual(array.table.versions['0.9.1'], entry)
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true })
+  }
 })
 
 test('the generator refuses npm output it cannot read', async () => {
@@ -278,9 +304,9 @@ test('the generator --check exits 1 when npm has a stable version the table lack
     assert.equal(main(['--check'], { executor: npmView([...stockVersions(), '1.0.0-canary-1']), tablePath: copy, workRoot: work }), 0)
     assert.equal(main(['--check'], { executor: npmView([...stockVersions(), '0.9.1']), tablePath: copy, workRoot: work }), 1)
     assert.equal(main(['--bogus'], { executor: npmView([]), tablePath: copy, workRoot: work }), 2)
+    assert.equal(fs.readFileSync(copy, 'utf8'), fs.readFileSync(tablePath, 'utf8'))
   } finally {
     Object.assign(console, quiet)
+    fs.rmSync(work, { recursive: true, force: true })
   }
-  assert.equal(fs.readFileSync(copy, 'utf8'), fs.readFileSync(tablePath, 'utf8'))
-  fs.rmSync(work, { recursive: true, force: true })
 })

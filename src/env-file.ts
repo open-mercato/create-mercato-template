@@ -12,20 +12,25 @@ export type EnvAssignment = {
   line: number
 }
 
-const assignment = /^(#\s*)?(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
+const active = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$/
+// A commented assignment needs an upper-case key (spec, Env diff item 1), so
+// prose such as `# note=hello` stays a comment.
+const commented = /^#\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)=(.*)$/
 
 /**
  * Every assignment in `text`, in file order. A commented assignment is a line
- * whose text after `#` is itself an assignment (`# REDIS_URL=redis://...`);
- * other comment lines and blank lines are skipped.
+ * whose text after `#` is an assignment with an upper-case key
+ * (`# REDIS_URL=redis://...`); other comment lines and blank lines are skipped.
  */
 export function parseEnvAssignments(text: string): EnvAssignment[] {
   const result: EnvAssignment[] = []
   const lines = text.split(/\r?\n/)
   for (let index = 0; index < lines.length; index += 1) {
-    const match = assignment.exec(lines[index].trim())
+    const line = lines[index].trim()
+    const isComment = line.startsWith('#')
+    const match = (isComment ? commented : active).exec(line)
     if (!match) continue
-    result.push({ key: match[2], value: match[3].trim(), commented: match[1] !== undefined, line: index + 1 })
+    result.push({ key: match[1], value: match[2].trim(), commented: isComment, line: index + 1 })
   }
   return result
 }

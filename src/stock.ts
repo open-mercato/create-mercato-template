@@ -48,7 +48,8 @@ export function stockVersions(table: StockTable = stockTable): string[] {
 /** The newest known version and its entry (the env diff of an unknown version compares with it). */
 export function newestStock(table: StockTable = stockTable): { version: string; entry: StockVersion } {
   const versions = stockVersions(table)
-  const version = versions[versions.length - 1]
+  const version = versions.at(-1)
+  if (version === undefined) throw new Error('The stock table has no versions.')
   return { version, entry: table.versions[version] }
 }
 
