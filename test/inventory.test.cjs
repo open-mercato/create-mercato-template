@@ -579,3 +579,85 @@ test('the JSON Schema helper rejects what the draft schema forbids', () => {
   assert.notDeepEqual(validate(schema, { ...valid, modules: [{ id: 'a', from: '@app', when: 'OM_A || OM_B' }] }), [])
   assert.notDeepEqual(validate(schema, { ...valid, modules: [{ id: 'Bad', from: '@app' }] }), [])
 })
+
+// ---------------------------------------------------------------------------
+// Review of PR #6: hostile input and uses of the list the scan must not miss
+
+test('a src/modules.ts nested too deeply for the parser is modules-unparsed as a whole, never a throw', () => {
+  for (const text of [
+    `export const enabledModules = [{ id: 'auth' }]\nif (${'!'.repeat(5000)}process.env.OM_A) enabledModules.push({ id: 'x' })\n`,
+    `export const enabledModules = [{ id: 'auth' }]\nconst x = ${'('.repeat(20000)}1${')'.repeat(20000)}\n`,
+  ]) {
+    const inventory = inventoryOf({ 'src/modules.ts': text })
+    assert.deepEqual(inventory.entries, [])
+    assert.deepEqual(inventory.unparsed, [{ line: 1, reason: 'src/modules.ts is nested too deeply to read' }])
+  }
+  const imported = inventoryOf({
+    'src/modules.ts': modulesTs("import { more } from './more'\nfor (const entry of more) enabledModules.push(entry)\n"),
+    'src/more.ts': `export const more = [${'['.repeat(20000)}${']'.repeat(20000)}]\n`,
+  })
+  assert.deepEqual(imported.unparsed, [{ line: 7, reason: 'src/more.ts is nested too deeply to read' }])
+})
+
+test('every other use of the list is unparsed with its line, through wrappers too', () => {
+  const body = [
+    "enabledModules['push']({ id: 'x', from: '@app' })",
+    ';(enabledModules).splice(0, 1)',
+    ';(enabledModules as ModuleEntry[]).pop()',
+    ';(enabledModules).length = 0',
+    'let a: ModuleEntry[] = []',
+    'a = enabledModules',
+    'function list() { return enabledModules }',
+    'const w = [enabledModules]',
+    "for (const m of enabledModules) m.id = 'b'",
+    "enabledModules.forEach((m) => { m.id = 'c' })",
+    'enabledModules.push(...enabledModules)',
+    "{ const enabledModules: ModuleEntry[] = []; enabledModules.push({ id: 'shadow', from: '@app' }) }",
+    // Reads stay quiet:
+    ';(enabledModules).push({ id: "wrapped", from: "@app" })',
+    'export const count = enabledModules.length + enabledModules.filter(Boolean).length',
+    'export const copy = [...enabledModules]',
+    'export type List = typeof enabledModules',
+    '',
+  ].join('\n')
+  const inventory = inventoryOf({ 'src/modules.ts': modulesTs(body) })
+  assert.deepEqual(
+    inventory.entries.map((entry) => entry.id),
+    ['auth', 'wrapped'],
+  )
+  assert.deepEqual([...new Set(inventory.unparsed.map((item) => item.line))], [6, 7, 8, 9, 11, 12, 13, 14, 15, 16, 17])
+  // No reason names an identifier of the app's source.
+  assert.ok(inventory.unparsed.every((item) => !/enabledModules|\bm\.id\b/.test(item.reason)), JSON.stringify(inventory.unparsed))
+})
+
+test('an unknown from that is not path-like is never copied into the manifest', () => {
+  const inventory = inventoryOf({
+    'src/modules.ts': modulesTs('', "  { id: 'url', from: 'https://user:pass@example.test/x' },\n  { id: 'local', from: '~/modules/local' },\n"),
+  })
+  assert.deepEqual(
+    inventory.entries.map((entry) => `${entry.id} ${entry.from}`),
+    ['local ~/modules/local'],
+  )
+  assert.deepEqual(
+    inventory.unparsed.map((item) => item.line),
+    [4],
+  )
+  assert.ok(!JSON.stringify(inventory).includes('pass@'))
+})
+
+test('the dedupe loop stays linear: 20,000 official entries', () => {
+  const official = `export const officialModuleEntries = [\n${Array.from({ length: 20000 }, (_, index) => `  { id: 'm_${index}', from: '@app' },\n`).join('')}]\n`
+  const started = Date.now()
+  const inventory = inventoryOf({
+    'src/modules.ts': modulesTs(
+      "import { officialModuleEntries } from './official-modules.generated'\nfor (const entry of officialModuleEntries) {\n  if (!enabledModules.some((existing) => existing.id === entry.id)) enabledModules.push(entry)\n}\n",
+    ),
+    'src/official-modules.generated.ts': official,
+  })
+  assert.equal(inventory.entries.length, 20001)
+  assert.ok(Date.now() - started < 10000, `took ${Date.now() - started} ms`)
+})
+
+test('slugify drops the accents NFKD splits off', () => {
+  assert.equal(slugify('Résumé App'), 'resume-app')
+})

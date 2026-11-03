@@ -57,6 +57,9 @@ type Context = {
 
 const unconditional: Context = { terms: [], custom: null }
 
+/** Array methods that never change the array or its entries' registration. `forEach` is not one: its callback may. */
+const readOnlyMethods = new Set(['some', 'every', 'find', 'findIndex', 'findLast', 'findLastIndex', 'includes', 'indexOf', 'lastIndexOf', 'map', 'filter', 'flatMap', 'reduce', 'slice', 'concat', 'join', 'at', 'entries', 'keys', 'values', 'toString'])
+
 /** Array methods that change the array in place. */
 const mutatingMethods = new Set(['push', 'unshift', 'splice', 'pop', 'shift', 'sort', 'reverse', 'fill', 'copyWithin'])
 
@@ -128,6 +131,10 @@ function readObject(node: ts.ObjectLiteralExpression): ObjectRead {
   if (!values.has('from')) return { id, from: defaultFrom }
   const from = stringValue(values.get('from') ?? undefined)
   if (from === null || from === '') return { reason: 'an entry whose from is not a string literal' }
+  // An unknown from is kept (module-from-unknown) only when it looks like a
+  // path or alias; anything else (a URL that may hold a credential, a line
+  // break) is never copied into the manifest.
+  if (!isKnownFrom(from) && !/^[A-Za-z0-9@~._/-]{1,214}$/.test(from)) return { reason: 'an entry whose from is neither @app, an npm package name nor a path' }
   return { id, from }
 }
 
@@ -153,6 +160,17 @@ export function readInventory(contents: ReadonlyMap<string, Buffer>): Inventory 
     return finish(inventory)
   }
   const text = content.toString('utf8')
+  try {
+    return readSource(contents, text, inventory)
+  } catch (caught) {
+    // The TypeScript parser recurses: a file nested thousands of levels deep
+    // (`!!!!...`, `((((...`) overflows the stack well below the size limit.
+    if (!(caught instanceof RangeError)) throw caught
+    return finish({ entries: [], unparsed: [{ line: 1, reason: 'src/modules.ts is nested too deeply to read' }], findings: [] })
+  }
+}
+
+function readSource(contents: ReadonlyMap<string, Buffer>, text: string, inventory: Inventory): Inventory {
   if (syntaxErrorCount(modulesPath, text) > 0) {
     inventory.findings.push({
       rule: 'modules-ts',
@@ -271,6 +289,10 @@ class Reader {
       }
       return [this.entry(read.id, read.from, context, line)]
     }
+    if (ts.isSpreadElement(value) && this.isBinding(value.expression)) {
+      this.unparsed(line, 'a spread of the module list into itself')
+      return []
+    }
     if (ts.isSpreadElement(value) && ts.isIdentifier(unwrap(value.expression))) {
       const array = this.readArray(unwrap(value.expression) as ts.Identifier, line)
       if (array === null) return []
@@ -286,6 +308,9 @@ class Reader {
 
   /** Step 2 and 3: the statements after the initial array, in source order, with their conditions. */
   private walk(statements: readonly ts.Statement[], context: Context): void {
+    // A block that declares its own variable of the list's name holds another
+    // list: its additions are not registrations (scanMutations lists them).
+    if (this.binding !== null && declaresName(statements, this.binding.text)) return
     for (const statement of statements) {
       if (ts.isBlock(statement)) this.walk(statement.statements, context)
       else if (ts.isExpressionStatement(statement)) this.expression(statement.expression, context)
@@ -426,8 +451,10 @@ class Reader {
     this.handled.add(call)
     const array = this.readArray(iterated, line)
     if (array === null) return
+    const ids = new Set(this.inventory.entries.map((entry) => entry.id))
     for (const item of array) {
-      if (dedupe && this.inventory.entries.some((entry) => entry.id === item.id)) continue
+      if (dedupe && ids.has(item.id)) continue
+      ids.add(item.id)
       this.inventory.entries.push(this.entry(item.id, item.from, context, line))
     }
   }
@@ -463,27 +490,33 @@ class Reader {
     const local = this.constInitializer(identifier.text)
     if (local !== null) {
       const array = unwrap(local)
-      return ts.isArrayLiteralExpression(array) ? this.arrayEntries(array, this.source, line) : this.fail(line, `${identifier.text} is not an array literal`)
+      return ts.isArrayLiteralExpression(array) ? this.arrayEntries(array, this.source, line) : this.fail(line, 'the array the loop reads is not an array literal')
     }
     const imported = this.importOf(identifier.text)
-    if (imported === null) return this.fail(line, `${identifier.text} is neither declared in src/modules.ts nor imported from a relative module`)
+    if (imported === null) return this.fail(line, 'the array the loop reads is neither declared in src/modules.ts nor imported from a relative module')
     const file = resolveImport(this.contents, imported.specifier)
-    if (file === null) return this.fail(line, `the module that ${identifier.text} is imported from is not in the snapshot`)
+    if (file === null) return this.fail(line, 'the module the array is imported from is not in the snapshot')
     const content = this.contents.get(file) as Buffer
     if (content.length > maxParseBytes) return this.fail(line, `${file} is larger than ${maxParseBytes} bytes`)
     const text = content.toString('utf8')
-    if (syntaxErrorCount(file, text) > 0) return this.fail(line, `${file} has a syntax error`)
-    const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    let source: ts.SourceFile
+    try {
+      if (syntaxErrorCount(file, text) > 0) return this.fail(line, `${file} has a syntax error`)
+      source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+    } catch (caught) {
+      if (!(caught instanceof RangeError)) throw caught
+      return this.fail(line, `${file} is nested too deeply to read`)
+    }
     for (const statement of source.statements) {
       if (!ts.isVariableStatement(statement) || !hasExport(statement)) continue
       for (const declaration of statement.declarationList.declarations) {
         if (!ts.isIdentifier(declaration.name) || declaration.name.text !== imported.name || declaration.initializer === undefined) continue
         const array = unwrap(declaration.initializer)
-        if (!ts.isArrayLiteralExpression(array)) return this.fail(line, `${file}: ${imported.name} is not an array literal`)
+        if (!ts.isArrayLiteralExpression(array)) return this.fail(line, `${file}: the imported array is not an array literal`)
         return this.arrayEntries(array, source, line)
       }
     }
-    return this.fail(line, `${file} does not export ${imported.name} as a const array`)
+    return this.fail(line, `${file} does not export the imported array as a const array`)
   }
 
   private fail(line: number, reason: string): null {
@@ -534,38 +567,65 @@ class Reader {
     visit(this.source)
   }
 
+  /**
+   * One reference to the list's name. Only an explicit set of uses is safe:
+   * the forms read above, a read-only method, `length`, a spread copy, an
+   * export or a type query. Every other use (a mutating or unknown method,
+   * an element access, an assignment, an alias, a return, the list passed
+   * on or stored, a loop over it, a variable of the same name) is
+   * `unparsed` with its line. Reasons never name source identifiers.
+   */
   private classify(node: ts.Identifier): void {
     const parent = node.parent
-    if (ts.isPropertyAccessExpression(parent) && parent.name === node) return
-    if (ts.isExportSpecifier(parent) || ts.isImportSpecifier(parent) || ts.isPropertyAssignment(parent) && parent.name === node) return
-    if (ts.isPropertyAccessExpression(parent) && parent.expression === node) {
-      const call = parent.parent
-      if (ts.isCallExpression(call) && call.expression === parent) {
-        if (mutatingMethods.has(parent.name.text) && !this.handled.has(call)) this.unparsed(this.line(call), `${node.text}.${parent.name.text}() in a form the inventory cannot read`)
+    // The name itself in another role: `x.enabledModules`, `{ enabledModules: ... }`, an export or import.
+    if ((ts.isPropertyAccessExpression(parent) && parent.name === node) || (ts.isPropertyAssignment(parent) && parent.name === node)) return
+    if (ts.isExportSpecifier(parent) || ts.isImportSpecifier(parent) || ts.isTypeQueryNode(parent) || ts.isQualifiedName(parent)) return
+    if ((ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isFunctionDeclaration(parent) || ts.isBindingElement(parent)) && parent.name === node) {
+      this.unparsed(this.line(parent), 'another variable with the name of the module list')
+      return
+    }
+    let top: ts.Node = node
+    while (
+      ts.isParenthesizedExpression(top.parent) ||
+      ts.isAsExpression(top.parent) ||
+      ts.isSatisfiesExpression(top.parent) ||
+      ts.isNonNullExpression(top.parent) ||
+      ts.isTypeAssertionExpression(top.parent)
+    )
+      top = top.parent
+    const user = top.parent
+    if (ts.isExportAssignment(user) || ts.isSpreadElement(user)) return
+    if (ts.isPropertyAccessExpression(user) && user.expression === top) {
+      const method = user.name.text
+      const call = user.parent
+      if (ts.isCallExpression(call) && call.expression === user) {
+        if (this.handled.has(call) || readOnlyMethods.has(method)) return
+        this.unparsed(this.line(call), mutatingMethods.has(method) ? `a ${method}() on the module list in a form the inventory cannot read` : 'a method call on the module list the inventory cannot follow')
         return
       }
-      if (isAssignmentTarget(parent)) this.unparsed(this.line(parent), `an assignment to ${node.text}.${parent.name.text}`)
+      if (method === 'length' && !isAssignmentTarget(user)) return
+      this.unparsed(this.line(user), 'a use of the module list the inventory cannot follow')
       return
     }
-    if (ts.isElementAccessExpression(parent) && parent.expression === node) {
-      if (isAssignmentTarget(parent)) this.unparsed(this.line(parent), `an assignment to an element of ${node.text}`)
+    if (ts.isBinaryExpression(user) && user.left === top && isAssignmentOperator(user.operatorToken.kind)) {
+      if (!this.handled.has(user)) this.unparsed(this.line(user), 'an assignment to the module list the inventory cannot read')
       return
     }
-    if (ts.isBinaryExpression(parent) && parent.left === node && isAssignmentOperator(parent.operatorToken.kind)) {
-      if (!this.handled.has(parent)) this.unparsed(this.line(parent), `an assignment to ${node.text} the inventory cannot read`)
+    if ((ts.isCallExpression(user) || ts.isNewExpression(user)) && user.expression !== top) {
+      this.unparsed(this.line(user), 'the module list passed to a function, which may add modules')
       return
     }
-    if ((ts.isCallExpression(parent) || ts.isNewExpression(parent)) && (parent.arguments ?? []).some((argument) => unwrap(argument) === node)) {
-      this.unparsed(this.line(parent), `${node.text} passed to a function, which may add modules`)
-      return
-    }
-    if (ts.isVariableDeclaration(parent) && parent.initializer !== undefined && unwrap(parent.initializer) === node) {
-      this.unparsed(this.line(parent), `${node.text} aliased to another name, which may add modules`)
-      return
-    }
-    if (ts.isShorthandPropertyAssignment(parent) || (ts.isPropertyAssignment(parent) && parent.initializer === node))
-      this.unparsed(this.line(parent), `${node.text} stored in an object, which may add modules`)
+    this.unparsed(this.line(user), 'a use of the module list the inventory cannot follow')
   }
+}
+
+/** True when the statements declare a variable, function or class of this name at their own level. */
+function declaresName(statements: readonly ts.Statement[], name: string): boolean {
+  return statements.some(
+    (statement) =>
+      (ts.isVariableStatement(statement) && statement.declarationList.declarations.some((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === name)) ||
+      ((ts.isFunctionDeclaration(statement) || ts.isClassDeclaration(statement)) && statement.name?.text === name),
+  )
 }
 
 function negate(term: string): string {

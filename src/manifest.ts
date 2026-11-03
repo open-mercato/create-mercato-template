@@ -59,6 +59,7 @@ export function isPlainText(value: string): boolean {
 export function slugify(text: string): string {
   const slug = text
     .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .slice(0, maxNameLength)
