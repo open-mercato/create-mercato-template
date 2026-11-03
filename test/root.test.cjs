@@ -101,7 +101,8 @@ test('Yarn 3: root-package-manager', () => {
 })
 
 test('no packageManager, npm or pnpm: root-package-manager; Yarn 4 with a hash passes', () => {
-  const { packageManager: _drop, ...withoutManager } = basePackage
+  const withoutManager = { ...basePackage }
+  delete withoutManager.packageManager
   assertErrors(run(createFixtureRepo({ 'package.json': `${JSON.stringify(withoutManager)}\n` })), ['root-package-manager package.json'])
   assertErrors(run(createFixtureRepo({ 'package.json': packageJson({ packageManager: 'pnpm@9.0.0' }) })), ['root-package-manager package.json'])
   assert.equal(isYarn4(`yarn@4.12.0+sha512.${'a'.repeat(16)}`), true)
