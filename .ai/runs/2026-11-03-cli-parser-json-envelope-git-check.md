@@ -46,3 +46,5 @@ PR: #2
 ### Phase 3: Docs
 
 - [x] 3.1 BACKWARD_COMPATIBILITY.md, docs/guide.md and CHANGELOG.md : dc93b29
+
+- [x] Post-review fix: email redaction, redaction test, command-first hint, boolean flag and -- messages : e79c76b
