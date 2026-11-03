@@ -63,3 +63,4 @@ PR: #6
 ### Phase 4: Docs
 
 - [x] 4.1 docs/guide.md, CHANGELOG.md and AGENTS.md : 837e7d3
+- [x] Post-review fix: deep nesting is unparsed, every unsafe use of the list unparsed (wrappers, aliases, element access, loops, shadowing, self-spread), linear dedupe, path-like unknown from, no identifiers in reasons, slug accents : ca8d79b
