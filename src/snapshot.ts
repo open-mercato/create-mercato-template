@@ -39,7 +39,7 @@ export function sha256Hex(content: Buffer | string): string {
   return createHash('sha256').update(content).digest('hex')
 }
 
-function compareUtf8(left: string, right: string): number {
+export function compareUtf8(left: string, right: string): number {
   return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'))
 }
 

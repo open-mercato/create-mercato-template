@@ -65,12 +65,12 @@ test('the Step 3 fixture app passes the root checks and fills the report fields'
   assert.equal(result.exitCode, 0)
   assert.match(result.snapshotId, /^[0-9a-f]{64}$/)
   assert.deepEqual(report.openMercato, { version: coreVersion, line: '0.9' })
-  assert.deepEqual(report.enterprise, { dependency: false })
+  assert.deepEqual(report.enterprise, { dependency: false, modules: [] })
   assert.deepEqual(report.stock, { version: coreVersion, known: true })
   assert.equal(report.packageManager, 'yarn@4.12.0')
   assert.deepEqual(report.engines, { node: '>=24' })
   const notice = report.notices.find((item) => item.code === 'checks-incomplete')
-  assert.match(notice.detail, /snapshot core and the root checks only/)
+  assert.match(notice.detail, /snapshot core, the root checks, the module inventory and the manifest only/)
 })
 
 test('a mixed-line lockfile: root-om-mixed-lines', () => {
@@ -293,7 +293,7 @@ test('enterprise.dependency is true when yarn.lock resolves @open-mercato/enterp
   const { result, report } = run(app)
   assert.deepEqual(report.findings, [])
   assert.equal(result.exitCode, 0)
-  assert.deepEqual(report.enterprise, { dependency: true })
+  assert.deepEqual(report.enterprise, { dependency: true, modules: [] })
 })
 
 test('an unknown core version: stock known false', () => {
@@ -329,7 +329,7 @@ test('a repo error skips the root checks', () => {
   const { report } = run(app)
   assert.deepEqual(errorRules(report), ['no-commit .'])
   assert.equal(report.openMercato, null)
-  assert.deepEqual(report.enterprise, { dependency: false })
+  assert.deepEqual(report.enterprise, { dependency: false, modules: [] })
 })
 
 test('checkRoot reads only the contents it is given', () => {
