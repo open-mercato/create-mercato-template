@@ -5,8 +5,8 @@ const os = require('node:os')
 const path = require('node:path')
 const { spawnSync } = require('node:child_process')
 
-// Runs the real bin/cli.cjs next to a fake dist/cli.js whose main() throws
-// what FAKE_THROW describes, so the exit code mapping is tested on its own.
+// Runs the real bin/cli.cjs next to a fake dist/cli.js whose main() returns or
+// throws what FAKE_THROW describes, so the exit code mapping is tested on its own.
 function runWithThrow(spec) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cmt-bin-'))
   try {
@@ -17,6 +17,7 @@ function runWithThrow(spec) {
       path.join(root, 'dist', 'cli.js'),
       `exports.main = async () => {
   const spec = JSON.parse(process.env.FAKE_THROW)
+  if (spec.kind === 'return') return spec.value
   if (spec.kind === 'string') throw spec.value
   const error = spec.kind === 'object' ? {} : new Error('boom')
   throw Object.assign(error, spec.props)
@@ -48,4 +49,9 @@ test('bin maps every other failure to exit 1', () => {
     ['thrown string', { kind: 'string', value: 'boom' }],
   ]
   for (const [label, spec] of cases) assert.equal(runWithThrow(spec), 1, label)
+})
+
+test('bin keeps a returned exit code inside the 0-4 contract and maps anything else to 1', () => {
+  for (const code of [0, 1, 2, 3, 4]) assert.equal(runWithThrow({ kind: 'return', value: code }), code, `returned ${code}`)
+  for (const value of [5, 128, -1, '2', null]) assert.equal(runWithThrow({ kind: 'return', value }), 1, `returned ${JSON.stringify(value)}`)
 })
