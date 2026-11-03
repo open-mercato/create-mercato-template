@@ -1,0 +1,178 @@
+/**
+ * Root checks (spec Step 4, Rule table): the app is an Open Mercato app on
+ * Yarn 4 whose `@open-mercato/*` packages resolve to one line, and no path
+ * ends in `.template`. Every input comes from the snapshot's file contents:
+ * the blobs of the pinned sha, or the worktree versions Step 3 admits under
+ * `includeUncommitted`. Nothing else in the app is read. Messages name
+ * packages and versions, never other file content.
+ */
+import {
+  type Lockfile,
+  LockfileError,
+  entriesNamed,
+  isRegistryEntry,
+  parseLockfile,
+  resolveDependency,
+  versionLine,
+} from '../lockfile.js'
+import type { Finding } from './entries.js'
+
+export const corePackage = '@open-mercato/core'
+export const enterprisePackage = '@open-mercato/enterprise'
+const scope = '@open-mercato/'
+
+export type OpenMercato = { version: string; line: string }
+
+export type RootResult = {
+  findings: Finding[]
+  /** The pinned `@open-mercato/core` from `yarn.lock`, or null when it is not pinned. */
+  openMercato: OpenMercato | null
+  /** `enterprise.dependency`: `yarn.lock` resolves `@open-mercato/enterprise` (Q6). Step 5 adds `modules`. */
+  enterprise: { dependency: boolean }
+  /** `package.json` `packageManager`, or null. */
+  packageManager: string | null
+  /** `package.json` `engines` (string values only), or null. */
+  engines: Record<string, string> | null
+}
+
+type Json = Record<string, unknown>
+
+function isObject(value: unknown): value is Json {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function readJson(content: Buffer | undefined): Json | null {
+  if (!content) return null
+  try {
+    const value: unknown = JSON.parse(content.toString('utf8').replace(/^\uFEFF/, ''))
+    return isObject(value) ? value : null
+  } catch {
+    return null
+  }
+}
+
+function error(rule: string, path: string, message: string): Finding {
+  return { rule, level: 'error', path, message }
+}
+
+/** `dependencies` and `devDependencies` entries named `@open-mercato/*`, with their range (null when not a string). */
+function omDependencies(packageJson: Json): Array<{ name: string; range: string | null }> {
+  const seen = new Map<string, string | null>()
+  for (const field of ['dependencies', 'devDependencies']) {
+    const block = packageJson[field]
+    if (!isObject(block)) continue
+    for (const [name, range] of Object.entries(block))
+      if (name.startsWith(scope) && !seen.has(name)) seen.set(name, typeof range === 'string' ? range : null)
+  }
+  return [...seen].map(([name, range]) => ({ name, range }))
+}
+
+function stringRecord(value: unknown): Record<string, string> | null {
+  if (!isObject(value)) return null
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
+}
+
+/** True for a `packageManager` of Yarn 4 (`yarn@4.12.0`, with or without a `+sha...` hash). */
+export function isYarn4(packageManager: unknown): boolean {
+  return typeof packageManager === 'string' && /^yarn@4\.\d+\.\d+/.test(packageManager)
+}
+
+/**
+ * Runs the root checks over the snapshot. `contents` maps every exported
+ * path to its bytes.
+ */
+export function checkRoot(contents: ReadonlyMap<string, Buffer>): RootResult {
+  const findings: Finding[] = []
+  const result: RootResult = { findings, openMercato: null, enterprise: { dependency: false }, packageManager: null, engines: null }
+
+  for (const path of contents.keys())
+    if (path.endsWith('.template'))
+      findings.push(error('template-file', path, 'The template importer refuses paths ending in .template. Rename the file or remove it from the commit.'))
+
+  const monorepo = readJson(contents.get('packages/core/package.json'))
+  if (monorepo?.name === corePackage)
+    findings.push(
+      error(
+        'root-monorepo',
+        'packages/core/package.json',
+        'This is the Open Mercato framework monorepo, not an app. Save an app created with create-mercato-app instead.',
+      ),
+    )
+
+  const packageJson = readJson(contents.get('package.json'))
+  if (packageJson === null) {
+    findings.push(
+      error(
+        'root-package-json',
+        'package.json',
+        contents.has('package.json') ? 'The root package.json is not a JSON object.' : 'The pinned commit has no root package.json.',
+      ),
+    )
+  } else {
+    const dependencies = packageJson.dependencies
+    if (!isObject(dependencies) || !Object.hasOwn(dependencies, corePackage))
+      findings.push(error('root-not-om-app', 'package.json', `package.json does not depend on ${corePackage}: this is not an Open Mercato app.`))
+    if (Object.hasOwn(packageJson, 'workspaces'))
+      findings.push({
+        rule: 'root-workspaces',
+        level: 'warning',
+        path: 'package.json',
+        message: 'The root package.json has workspaces. Allowed; check that every workspace belongs in the template.',
+      })
+    if (!isYarn4(packageJson.packageManager))
+      findings.push(
+        error(
+          'root-package-manager',
+          'package.json',
+          'packageManager must be Yarn 4 (yarn@4.x). Run corepack use yarn@4 in the app and commit package.json and yarn.lock.',
+        ),
+      )
+    result.packageManager = typeof packageJson.packageManager === 'string' ? packageJson.packageManager : null
+    result.engines = stringRecord(packageJson.engines)
+  }
+
+  const lockContent = contents.get('yarn.lock')
+  let lockfile: Lockfile | null = null
+  if (!lockContent) {
+    findings.push(error('root-yarn-lock', 'yarn.lock', 'The pinned commit has no root yarn.lock. Run yarn install in the app and commit yarn.lock.'))
+  } else {
+    try {
+      lockfile = parseLockfile(lockContent)
+    } catch (caught) {
+      if (!(caught instanceof LockfileError)) throw caught
+      findings.push(
+        error('root-yarn-lock', 'yarn.lock', `The root yarn.lock cannot be read as a Yarn 4 lockfile: ${caught.message}. Run yarn install with Yarn 4 and commit yarn.lock.`),
+      )
+    }
+  }
+  if (lockfile === null) return result
+
+  if (packageJson !== null)
+    for (const dependency of omDependencies(packageJson))
+      if (resolveDependency(lockfile, dependency.name, dependency.range) === null)
+        findings.push(
+          error('root-om-unresolved', 'package.json', `${dependency.name} has no entry in yarn.lock. Run yarn install and commit yarn.lock.`),
+        )
+
+  const lines = new Map<string, Set<string>>()
+  for (const entry of lockfile.entries) {
+    if (!entry.name.startsWith(scope) || !isRegistryEntry(entry)) continue
+    const line = versionLine(entry.version)
+    if (line !== null) lines.set(line, (lines.get(line) ?? new Set()).add(entry.name))
+  }
+  if (lines.size > 1)
+    findings.push(
+      error(
+        'root-om-mixed-lines',
+        'yarn.lock',
+        `Resolved @open-mercato packages span ${lines.size} lines (${[...lines.keys()].sort().join(', ')}). Align every @open-mercato dependency on one major.minor line.`,
+      ),
+    )
+
+  const coreRange = packageJson !== null && isObject(packageJson.dependencies) ? packageJson.dependencies[corePackage] : undefined
+  const core = resolveDependency(lockfile, corePackage, typeof coreRange === 'string' ? coreRange : null)
+  const coreLine = core ? versionLine(core.version) : null
+  if (core && coreLine !== null) result.openMercato = { version: core.version, line: coreLine }
+  result.enterprise.dependency = entriesNamed(lockfile, enterprisePackage).length > 0
+  return result
+}

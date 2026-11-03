@@ -304,7 +304,7 @@ export function buildSnapshot(input: SnapshotInput): Snapshot {
   }
   files.sort((left, right) => compareUtf8(left.path, right.path))
   findings.push(...caseCollisions(files.map((file) => file.path)))
-  findings.sort((left, right) => compareUtf8(left.path, right.path) || left.rule.localeCompare(right.rule))
+  sortFindings(findings)
   uncommitted.sort((left, right) => compareUtf8(left.path, right.path))
 
   return {
@@ -316,6 +316,11 @@ export function buildSnapshot(input: SnapshotInput): Snapshot {
       .sort((left, right) => patternOrder(left.pattern) - patternOrder(right.pattern)),
     uncommitted,
   }
+}
+
+/** Sorts findings in place by the UTF-8 bytes of the path, then by rule. */
+export function sortFindings(findings: Finding[]): Finding[] {
+  return findings.sort((left, right) => compareUtf8(left.path, right.path) || left.rule.localeCompare(right.rule))
 }
 
 function stripTrailingSlash(item: Buffer): Buffer {

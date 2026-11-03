@@ -5,6 +5,7 @@ import { type Executor, run } from './common.js'
 import { CliError, exitCodes } from './errors.js'
 import { GitReader, checkGit, isDubiousOwnership, unsafeDirectoryError } from './git.js'
 import type { Finding } from './policy/entries.js'
+import { type OpenMercato, type RootResult, checkRoot } from './policy/root.js'
 import {
   type Excluded,
   type FileRecord,
@@ -12,11 +13,14 @@ import {
   type Uncommitted,
   buildSnapshot,
   computeSnapshotId,
+  sortFindings,
   writeOut,
 } from './snapshot.js'
+import { matchStock } from './stock.js'
 
 export type { Finding } from './policy/entries.js'
 export type { Excluded, FileRecord, Uncommitted } from './snapshot.js'
+export type { OpenMercato } from './policy/root.js'
 
 /**
  * The internal entry point of `prepare` (spec Step 3). The CLI command keeps
@@ -47,12 +51,22 @@ export type Report = {
   tool: { name: string; version: string }
   createdAt: string
   source: { head: string | null; dirty: boolean; includeUncommitted: boolean }
+  /** The stock entry matched by the pinned core version; `known: false` when the table lacks it. */
+  stock: { version: string | null; known: boolean }
+  /** `package.json` `engines`, string values only. */
+  engines: Record<string, string> | null
+  /** `package.json` `packageManager`. */
+  packageManager: string | null
   files: FileRecord[]
   snapshotId: string | null
   findings: Finding[]
   notices: Notice[]
+  /** The pinned `@open-mercato/core` from `yarn.lock`: version and `major.minor` line. */
+  openMercato: OpenMercato | null
   uncommitted: Uncommitted[]
   excluded: Excluded[]
+  /** Q6. `dependency`: `yarn.lock` resolves `@open-mercato/enterprise`. Step 5 adds `modules`. */
+  enterprise: { dependency: boolean }
   totals: { files: number; bytes: number }
 }
 
@@ -78,7 +92,7 @@ const codeOnly: Notice = {
 const checksIncomplete: Notice = {
   code: 'checks-incomplete',
   detail:
-    'This version runs the snapshot core only. The root checks, module inventory, secret scan, opaque file check and the regenerated .env.example come in later versions; the root .env.example is excluded until then.',
+    'This version runs the snapshot core and the root checks only. The module inventory and manifest, the secret scan, the opaque file check, the warnings and the regenerated .env.example come in later versions; the root .env.example is excluded until then.',
 }
 
 const uncommittedNotExported: Notice = {
@@ -224,6 +238,11 @@ export function prepare(options: PrepareOptions): PrepareResult {
       ? { files: [], contents: new Map(), findings: base.findings, excluded: [], uncommitted: [] }
       : buildSnapshot({ git, appReal, head: base.head, includeUncommitted })
 
+  const root: RootResult | null = base.head === null ? null : checkRoot(snapshot.contents)
+  if (root) {
+    snapshot.findings.push(...root.findings)
+    sortFindings(snapshot.findings)
+  }
   const errors = snapshot.findings.filter((item) => item.level === 'error')
   const snapshotId = errors.length === 0 ? computeSnapshotId(snapshot.files) : null
   const notices: Notice[] = [codeOnly, checksIncomplete]
@@ -234,16 +253,26 @@ export function prepare(options: PrepareOptions): PrepareResult {
     tool: { name: 'create-mercato-template', version: toolVersion() },
     createdAt: now().toISOString(),
     source: { head: base.head, dirty: snapshot.uncommitted.length > 0, includeUncommitted },
+    stock: stockOf(root?.openMercato ?? null),
+    engines: root?.engines ?? null,
+    packageManager: root?.packageManager ?? null,
     files: snapshot.files,
     snapshotId,
     findings: snapshot.findings,
     notices,
+    openMercato: root?.openMercato ?? null,
     uncommitted: snapshot.uncommitted,
     excluded: snapshot.excluded,
+    enterprise: root?.enterprise ?? { dependency: false },
     totals: { files: snapshot.files.length, bytes: snapshot.files.reduce((sum, file) => sum + file.size, 0) },
   }
   writeOut(out, snapshot.files, snapshot.contents, report, snapshotId !== null)
   return { exitCode: errors.length === 0 ? 0 : 1, failures: errors, out, snapshotId, report }
+}
+
+function stockOf(openMercato: OpenMercato | null): Report['stock'] {
+  const match = matchStock(openMercato?.version ?? null)
+  return { version: match.version, known: match.known }
 }
 
 function repoFinding(rule: keyof typeof repoHints): Finding {
