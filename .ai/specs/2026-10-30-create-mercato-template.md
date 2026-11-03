@@ -1,6 +1,6 @@
 # create-mercato-template: save an Open Mercato app as a template
 
-Status: Draft for review. Date: 2026-10-30. Author: Wojtek Szyjka (builds). Reviewer and npm publisher: Piotr Karwatka.
+Status: Approved by Piotr Karwatka on 2026-10-30.
 Target path in this repo: `.ai/specs/2026-10-30-create-mercato-template.md`.
 Parent spec: [Templates, revision 6, approved by Piotr Karwatka on 2026-10-29](https://github.com/open-mercato/modules/blob/main/docs/specs/2026-10-29-templates.md) (called "the catalog spec" below). This spec is its Phase 2 (decision A12). Where the two differ, the catalog spec wins and this file is fixed.
 
@@ -101,7 +101,7 @@ Source layout (new repo, TypeScript compiled to CommonJS in `dist/`, as `create-
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
 | `bin/cli.cjs`, `src/cli.ts`          | Argument parsing by hand, the flag matrix, help, the JSON envelope, exit codes.                                          |
 | `src/common.ts`                      | `run` and the `Executor` type, copied from `create-mercato-module`: argument arrays, capture timeout, no shell.          |
-| `src/git.ts`                         | Pin `HEAD`, list the tree, read blobs in one `cat-file --batch`, `check-attr --source` for `export-ignore` and `filter`, worktree changes without `git status` ([Snapshot](#snapshot) step 5). |
+| `src/git.ts`                         | The Git check (Step 1). Pin `HEAD`, list the tree, read blobs in one `cat-file --batch`, `check-attr --source` for `export-ignore` and `filter`, worktree changes without `git status` ([Snapshot](#snapshot) step 5). |
 | `src/snapshot.ts`                    | Build the file set, write `<out>`, hash, `snapshotId`, verify.                                                           |
 | `src/prepare.ts`                     | The `prepare()` entry point that runs the snapshot and the policy. Tests call it from Step 3; the CLI calls it from Step 8. |
 | `src/policy/*.ts`                    | One file per rule group: `root`, `entries`, `deny`, `opaque`, `secrets`, `env`, `warnings`.                               |
@@ -115,7 +115,7 @@ Source layout (new repo, TypeScript compiled to CommonJS in `dist/`, as `create-
 | `scripts/*.mts`                      | Release-time generators (stock table, secret rules). Never shipped.                                                      |
 | `test/*.test.cjs`, `test/release-e2e/` | Unit tests against `dist/`; local release checks with a `gh` shim and a loopback tarball API.                         |
 
-Requirements at run time: Node 24 or newer (`engines`), Git 2.40 or newer (`check-attr --source`), and `gh` for `publish` only. Step 1 checks the Git minimum with a test; the version is a claim to confirm there. No `git` on `PATH` is `git-missing`.
+Requirements at run time: Node 24 or newer (`engines`), Git 2.40 or newer (`check-attr --source`), and `gh` for `publish` only. Step 1 checks the Git minimum with a test. Confirmed in Step 1: `check-attr` takes a tree-ish since Git 2.40.0 (`Documentation/RelNotes/2.40.0.adoc` in `git/git`: "git check-attr learned to take an optional tree-ish to read the .gitattributes file from"). No `git` on `PATH` is `git-missing`.
 
 Consumers: the OM Cloud sandbox (Phase 3) and agents call the CLI. `create-mercato-app` reads only `schema`, `env` and `openMercato` from the manifest and then removes it (catalog D3). The catalog reads the manifest as a hint and cross-check.
 
@@ -150,7 +150,7 @@ npx create-mercato-template --help | -h | --version | -v
 
 A flag given to a command that does not take it, an unknown flag, a missing value or a repeated non-repeatable flag is a usage error (exit 2). Every flag is documented in `--help` and `docs/guide.md`.
 
-`--help` (or `-h`, or no arguments) prints help and exits 0. `--version` (or `-v`) prints the version and exits 0. The short forms are protected flags too. `--help` and `-h` count only where a flag is expected, never as the value of a flag: `describe --summary --help` reads `--help` as the summary.
+`--help` (or `-h`, or no arguments) prints help and exits 0. `--version` (or `-v`) prints the version and exits 0. The short forms are protected flags too. `--help` and `-h` count only where a flag is expected, never as the value of a flag: `describe --summary --help` reads `--help` as the summary. Where they count, they win over every usage error on the same command line (`prepare --bogus -h` prints help), and help is plain text even with `--json`. `--version` and `-v` work only as the only argument; anywhere else they are a usage error.
 
 ### Exit codes
 
@@ -181,6 +181,7 @@ Every command prints one object with this envelope:
 }
 ```
 
+- `command` is the command name, or `null` when the command line names no known command (`--json` alone, an unknown command, `--version` with other arguments). `tool.version` is the `version` of the package's own `package.json`, the value `--version` prints. With `--json` at a flag position, every exit prints one envelope, a usage error included.
 - `failures` lists every `error` finding or `publish` refusal (exit 1, for example `{rule: "snapshot-modified", reason}`), the usage problem (exit 2, `rule: "usage"`, with `message`), the auth problem (exit 3, `rule: "github-auth"`) or the failed step (exit 4, `{rule: "github-step", step, detail?}`). Every `rule` is in the [Rule table](#rule-table). It is empty when `ok` is true.
 - A top-level handler catches every error. A `CliError` keeps its exit code. Any other error is exit 1 with `rule: "internal"`. Under `--json` the handler always prints exactly one envelope, and never a stack on stdout; without `--json` it prints one message on stderr.
 - No field ever carries a secret value, a matched string, an env value or an email address.
@@ -280,9 +281,8 @@ The `rule` values are part of the JSON contract. The rows from `usage` down are 
 
 | Rule                         | Level   | Trigger                                                                                                                                                                           |
 | ---------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `not-git-repo`, `no-commit`, `app-not-repo-root`, `git-version`, `git-missing`, `git-unsafe-directory` | error | Step 1 above.                                                                                       |
+| `not-git-repo`, `no-commit`, `app-not-repo-root` | error | [Snapshot](#snapshot) item 1.                                                                                       |
 | `io-error`                   | error   | Reading or writing `<out>` failed (`ENOSPC`, `EACCES` and the like). Exit 1.                                                                                                     |
-| `internal`                   | error   | Any failure the tool did not expect. Exit 1, and the envelope is still printed under `--json`.                                                                                   |
 | `root-package-json`          | error   | No readable root `package.json`.                                                                                                                                                  |
 | `root-not-om-app`            | error   | `package.json` does not depend on `@open-mercato/core`.                                                                                                                           |
 | `root-monorepo`              | error   | The Open Mercato framework monorepo: a `packages/core/package.json` named `@open-mercato/core`.                                                                                  |
@@ -318,7 +318,9 @@ The `rule` values are part of the JSON contract. The rows from `usage` down are 
 | `allow-file-unused`          | warning | An `--allow-file` path that is not in the snapshot or is not opaque.                                                                                                              |
 | `exceeds-import-limits`      | warning | More than 50 MB or 5,000 files (Q10).                                                                                                                                             |
 | `manifest-name`, `manifest-description` | warning | See the manifest mapping.                                                                                                                                              |
-| `usage`                      | error   | Exit 2, every command. Adds `message`.                                                                                                                                            |
+| `usage`                      | error   | Exit 2, every command. Adds `message`. Also the answer of a command that is not implemented yet.                                                                                 |
+| `internal`                   | error   | Exit 1, every command: any failure the tool did not expect. Adds `message`, redacted like command output. The envelope is still printed under `--json`.                            |
+| `git-version`, `git-missing`, `git-unsafe-directory` | error | Exit 1, [Snapshot](#snapshot) item 1: Git below 2.40 or a version line the tool cannot read; no `git` on `PATH`; Git's "dubious ownership" refusal. Adds `message` with the hint; `git-unsafe-directory` adds `path: "."`. `prepare` (from Step 3) and `publish` (from Step 9) run the check before their first Git command. |
 | `github-auth`                | error   | Exit 3, `publish`: `gh` missing or `gh auth status` failing.                                                                                                                      |
 | `snapshot-modified`          | error   | Exit 1, `publish`: `<out>` does not verify. Adds `reason`: `file-changed`, `file-added`, `file-missing`, `expect-mismatch`, `report-errors`, `report-missing`.                    |
 | `publish-declined`           | error   | Exit 1, `publish`: the prompt (Q11) was answered no. Nothing remote.                                                                                                              |
@@ -531,7 +533,9 @@ Remaining after the bootstrap (the bootstrap on `main` already ships `package.js
 
 - `src/cli.ts`: the argument parser and the per-command flag matrix; `--help`/`-h` only where a flag is expected, never as the value of a flag; the JSON envelope; the top-level handler (a `CliError` keeps its code, any other error is exit 1 with `rule: "internal"`, and under `--json` the envelope is always printed). The three commands still answer exit 2 "not implemented yet" until their step (`prepare` until Step 8, see [Rule table](#rule-table)).
 - `src/common.ts`: `run` and `Executor`, copied from `create-mercato-module`.
-- The Git check: 2.40 or newer (`git-version`), `git` missing (`git-missing`), "dubious ownership" (`git-unsafe-directory`).
+- The Git check, `checkGit` in `src/git.ts`: 2.40 or newer (`git-version`), `git` missing (`git-missing`), "dubious ownership" (`git-unsafe-directory`). The version is the leading `major.minor` of `git version X.Y...` (`2.40.0.windows.1` and Apple suffixes pass); output the tool cannot read is `git-version`. No command reads Git in Step 1, so nothing calls it yet; it is tested through executors, and `prepare()` (Step 3) and `publish` (Step 9) call it before their first Git command.
+- Parser rules. Step 1 knows every flag of the [flag table](#commands-and-flags) with its command, its arity and whether it repeats, and refuses both `--public` and `--private`. Required flags and value checks (`--expect` hex, the `--use-case` set, text lengths, the `--out`/`--from` stat, `--json` needing `--expect`) and the per-command help come with the step that implements the command. The whole command line is read first; then help, then the first usage error, then "not implemented yet" (exit 2, `rule: "usage"`).
+- The top-level handler lives in `src/cli.ts`: `main()` prints the envelope or the stderr message and returns the exit code; `bin/cli.cjs` only sets it, keeping codes 0 to 4 and mapping anything else to 1.
 - `BACKWARD_COMPATIBILITY.md`: the protected surfaces listed under [Risks & Impact Review](#risks--impact-review).
 
 Tests: unknown command, unknown flag, flag on the wrong command, missing value, both `--public` and `--private`: exit 2, and with `--json` one parsable object with `rule: "usage"`. Replace the `--json` unknown-option assertion in `test/cli.test.cjs`. `describe --summary --help` does not print help. A thrown non-`CliError` gives exactly one JSON object with `rule: "internal"` and exit 1. The Git check refuses a fake `git version 2.39.0`, accepts `2.40.0`, and reports `git-missing` when `git` is not on `PATH`. The `--version` and `npm pack --dry-run` tests already exist.
