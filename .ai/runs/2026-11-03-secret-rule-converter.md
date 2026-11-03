@@ -29,13 +29,15 @@ Ship Step 6 of the spec's Implementation Plan: `scripts/build-secret-rules.mts` 
 
 ## Progress
 
+PR: #7
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` : <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Code
 
-- [ ] 1.1 Converter script, skipped list, generated rules and report.tool.rules
-- [ ] 1.2 Tests and the vendored gitleaks v8.30.1 fixture
+- [x] 1.1 Converter script, skipped list, generated rules and report.tool.rules : 78c7fdf
+- [x] 1.2 Tests and the vendored gitleaks v8.30.1 fixture : 535630c
 
 ### Phase 2: Docs
 
-- [ ] 2.1 docs/guide.md, CHANGELOG.md and AGENTS.md
+- [x] 2.1 docs/guide.md, CHANGELOG.md and AGENTS.md : 66aa2a2
