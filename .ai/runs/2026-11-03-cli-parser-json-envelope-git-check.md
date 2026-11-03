@@ -29,18 +29,20 @@ Ship Step 1 of the spec's Implementation Plan: a hand-written argument parser wi
 
 ## Progress
 
+PR: #2
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` : <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Spec
 
-- [ ] 1.1 Spec status line and Step 1 cohesion fixes
+- [x] 1.1 Spec status line and Step 1 cohesion fixes : 2b07fd2
 
 ### Phase 2: Code
 
-- [ ] 2.1 run and Executor in src/common.ts
-- [ ] 2.2 Git check in src/git.ts with tests
-- [ ] 2.3 Parser, flag matrix, envelope and handler in src/cli.ts and bin/cli.cjs with tests
+- [x] 2.1 run and Executor in src/common.ts : d6c5d1b
+- [x] 2.2 Git check in src/git.ts with tests : 22de750
+- [x] 2.3 Parser, flag matrix, envelope and handler in src/cli.ts and bin/cli.cjs with tests : c3e3100
 
 ### Phase 3: Docs
 
-- [ ] 3.1 BACKWARD_COMPATIBILITY.md, docs/guide.md and CHANGELOG.md
+- [x] 3.1 BACKWARD_COMPATIBILITY.md, docs/guide.md and CHANGELOG.md : dc93b29
