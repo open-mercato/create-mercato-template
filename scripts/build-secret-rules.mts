@@ -265,7 +265,19 @@ const posixClasses: Record<string, string> = {
 }
 
 /** Escapes with the same meaning in RE2 and in a JavaScript regex without the `u` flag. */
-const sharedEscapes = new Set(['d', 'D', 'w', 'W', 's', 'S', 'f', 'n', 'r', 't', 'v'])
+const sharedEscapes = new Set(['d', 'D', 'w', 'W', 'f', 'n', 'r', 't', 'v'])
+/** Escapes that stand for a set of characters: never the end of a class range in RE2. */
+const setEscapes = new Set(['d', 'D', 'w', 'W', 's', 'S'])
+/**
+ * RE2's `\s` is `[\t\n\f\r ]`. JavaScript's also has `\v` and the Unicode
+ * spaces (U+00A0, U+FEFF, U+2028 and more), so both are spelled out: as a
+ * class outside a class, and as members inside one (`\S` as the ranges of
+ * every other UTF-16 unit).
+ */
+const spaceEscapes: Record<'s' | 'S', { alone: string; member: string }> = {
+  s: { alone: '[\\t\\n\\f\\r ]', member: '\\t\\n\\f\\r ' },
+  S: { alone: '[^\\t\\n\\f\\r ]', member: '\\x00-\\x08\\x0b\\x0e-\\x1f!-\\uffff' },
+}
 const punctuation = /[!-/:-@[-`{-~]/
 
 type Frame = {
@@ -276,14 +288,21 @@ type Frame = {
 }
 
 /**
- * Converts one RE2 pattern. A leading `(?i)` (or `(?m)`) becomes a flag;
- * `i` and `m` elsewhere become JavaScript modifier groups (`(?i:...)`,
- * `(?-i:...)`), which Node 24 supports. RE2's `s` is applied to each dot
+ * Converts one RE2 pattern. A leading `(?i)` becomes the `i` flag; `i`
+ * elsewhere becomes a JavaScript modifier group (`(?i:...)`, `(?-i:...)`),
+ * which Node 24 supports. RE2's `m` is refused: JavaScript's `^` and `$`
+ * under `m` also stop at `\r`, U+2028 and U+2029. RE2's `s` is applied to each dot
  * instead of becoming a flag: a dot is `[\s\S]` where `s` is on and `[^\n]`
  * where it is off, because a JavaScript dot also stops at `\r`, `\u2028` and
  * `\u2029` and RE2's does not. `\z` is `$(?![\s\S])`, `\A` is `(?<![\s\S])`,
  * `(?P<name>` is `(?<name>`, a POSIX class is its ASCII ranges, and a `]`
- * first in a class (a literal in RE2) is escaped.
+ * first in a class (a literal in RE2) is escaped. `\s` and `\S` are spelled
+ * out as RE2's ASCII set (see `spaceEscapes`).
+ *
+ * Known differences that remain: without the `u` flag JavaScript works on
+ * UTF-16 units, so a dot or a negated class matches half of a character
+ * outside the BMP, and `(?i)` does not fold K with U+212A or s with U+017F as
+ * RE2 does. gitleaks v8.30.1 is plain ASCII, so no rule relies on either.
  */
 export function convertRegex(pattern: string): ConvertedRegex {
   let index = 0
@@ -305,7 +324,7 @@ export function convertRegex(pattern: string): ConvertedRegex {
       if (letter === '-') {
         if (negative) fail('a repeated - in a flag group')
         negative = true
-      } else if (!'ims'.includes(letter)) fail(`the RE2 flag ${letter} has no translation`)
+      } else if (!'is'.includes(letter)) fail(`the RE2 flag ${letter} has no translation`)
       else if (negative) off += letter
       else on += letter
     }
@@ -319,7 +338,7 @@ export function convertRegex(pattern: string): ConvertedRegex {
   }
 
   // A leading flag group applies to the whole pattern.
-  const leading = /^\(\?([ims]+)\)/.exec(pattern)
+  const leading = /^\(\?([is]+)\)/.exec(pattern)
   if (leading) {
     for (const letter of leading[1]) {
       if (letter === 's') stack[0].dotAll = true
@@ -426,6 +445,10 @@ export function convertRegex(pattern: string): ConvertedRegex {
       index += 2
       return `\\${next}`
     }
+    if (next === 's' || next === 'S') {
+      index += 2
+      return inClass ? spaceEscapes[next].member : spaceEscapes[next].alone
+    }
     if (!inClass && (next === 'b' || next === 'B')) {
       index += 2
       return `\\${next}`
@@ -449,6 +472,17 @@ export function convertRegex(pattern: string): ConvertedRegex {
       return `\\${next}`
     }
     return fail(`the escape \\${next} has no translation`)
+  }
+
+  /**
+   * In RE2 a `-` right after a set in a class (`[\s-x]`) is a literal. Once
+   * the set is spelled out it ends in a single character, which JavaScript
+   * would take as the start of a range, so the dash is escaped.
+   */
+  function literalDashAfterSet(): string {
+    if (pattern[index] !== '-' || pattern[index + 1] === ']') return ''
+    index++
+    return '\\-'
   }
 
   /** A bracket class at `index`. */
@@ -479,6 +513,7 @@ export function convertRegex(pattern: string): ConvertedRegex {
         if (ranges === undefined) fail(`the POSIX class ${posix![2]} is unknown`)
         result += ranges
         index += posix![0].length
+        result += literalDashAfterSet()
         continue
       }
       if (character === '[') {
@@ -487,9 +522,20 @@ export function convertRegex(pattern: string): ConvertedRegex {
         continue
       }
       if (character === '\\') {
+        const set = setEscapes.has(pattern[index + 1] ?? '')
         result += escape(true)
+        if (set) result += literalDashAfterSet()
         continue
       }
+      // `a-\d` or `a-[:digit:]`: RE2 refuses a set as the end of a range;
+      // JavaScript would read the dash as a literal.
+      if (
+        character === '-' &&
+        result !== '[' &&
+        result !== '[^' &&
+        ((pattern[index + 1] === '\\' && setEscapes.has(pattern[index + 2])) || pattern.startsWith('[:', index + 1))
+      )
+        fail('a class range that ends in a set')
       result += character
       index++
     }
@@ -567,7 +613,7 @@ export function convertRule(table: TomlValue): BundledRule {
   return { id, regex, secretGroup, entropy, keywords, path, allowlists }
 }
 
-/** Reads and checks scripts/secret-rules-skipped.json: `[{id, reason}]`, ids unique and sorted, reasons non-empty. */
+/** Reads and checks scripts/secret-rules-skipped.json: `[{id, reason}]`, ids unique, reasons non-empty. */
 export function parseSkipped(text: string): SkippedRule[] {
   const parsed: unknown = JSON.parse(text)
   if (!Array.isArray(parsed)) throw new Error('secret-rules-skipped.json is not a list.')
@@ -584,7 +630,8 @@ export function parseSkipped(text: string): SkippedRule[] {
 
 /**
  * Converts a gitleaks config. Fails when a rule cannot be converted and is
- * not listed in `skipped`, when `skipped` lists an id the config lacks, and
+ * not listed in `skipped`, when `skipped` lists an id the config lacks or a
+ * rule that converts, and
  * when a required id is missing from the result. Rules keep their order in
  * the config; the global allowlist is dropped.
  */
@@ -601,7 +648,19 @@ export function buildSecretRules(toml: string, skipped: SkippedRule[], source: R
     const id = isTable(table) && typeof table.id === 'string' ? table.id : null
     if (id !== null && ids.has(id)) throw new Error(`The config defines the rule ${id} twice.`)
     if (id !== null) ids.add(id)
-    if (id !== null && skippedIds.has(id)) continue
+    if (id !== null && skippedIds.has(id)) {
+      // A listed rule that now converts would stay out silently after a
+      // gitleaks upgrade: the maintainer removes it from the list instead.
+      let converts = true
+      try {
+        convertRule(table)
+      } catch (error) {
+        if (!(error instanceof ConversionError)) throw error
+        converts = false
+      }
+      if (converts) throw new Error(`scripts/secret-rules-skipped.json lists ${id}, which converts; remove it from the list.`)
+      continue
+    }
     try {
       rules.push(convertRule(table))
     } catch (error) {

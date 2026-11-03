@@ -119,7 +119,7 @@ test('the rule build fails when a required id is removed from the input TOML', a
   assert.throws(() => buildSecretRules(withoutRule(fixtureToml, 'private-key'), []), /Required rule\(s\) missing[^\n]*private-key/)
   assert.throws(() => buildSecretRules(withoutRule(fixtureToml, 'slack-webhook-url'), []), /slack-webhook-url/)
   // Skipping a required rule does not get around the check.
-  assert.throws(() => buildSecretRules(fixtureToml, [{ id: 'github-pat', reason: 'test' }]), /missing[^\n]*github-pat/)
+  assert.throws(() => buildSecretRules(fixtureToml, [{ id: 'github-pat', reason: 'test' }]), /lists github-pat, which converts/)
   assert.ok(buildSecretRules(smallConfig(), []).rules.length === requiredIds.length)
 })
 
@@ -137,6 +137,8 @@ test('the rule build fails on a construct it cannot convert, unless the rule is 
     () => buildSecretRules(smallConfig(`[[rules]]\nid = "commits"\nregex = '''x'''\n[[rules.allowlists]]\ncommits = ["abc"]\n`), []),
     /commits allowlists\[0\] has the unsupported key commits/,
   )
+  // A listed rule that converts would stay out silently after an upgrade: fail.
+  assert.throws(() => buildSecretRules(smallConfig(), [{ id: 'npm-access-token', reason: 'old' }]), /lists npm-access-token, which converts/)
   // A listed id the config does not have is stale.
   assert.throws(() => buildSecretRules(smallConfig(), [{ id: 'gone', reason: 'old' }]), /does not have: gone/)
 })
@@ -159,11 +161,10 @@ test('translation \\z: the end of the text only', async () => {
   assert.ok(regex.test('x = token-abcd'))
   assert.ok(regex.test('token-abcd;'))
   assert.ok(!regex.test('token-abcde'))
-  // With the m modifier, $ alone would also match before a line break.
-  const multiline = compile(convertRegex('(?m)token-[a-z]{4}\\z'))
-  assert.equal(multiline.flags, 'm')
-  assert.ok(!multiline.test('token-abcd\nmore'))
-  assert.ok(multiline.test('more\ntoken-abcd'))
+  const end = compile(convertRegex('abc\\z'))
+  assert.ok(end.test('x abc'))
+  assert.ok(!end.test('abc\nx'))
+  assert.ok(!end.test('abc\n'))
   // In JavaScript \z alone is the letter z: the converter never passes it through.
   assert.ok(!converted.source.includes('\\z'))
 })
@@ -230,9 +231,30 @@ test('other translations: leading (?i), (?i) inside a group across |, (?-i:, and
   assert.equal(compile(convertRegex('\\Aabc')).test('xabc'), false)
 })
 
+test('\\s and \\S: RE2 ASCII spaces only, outside and inside a class', async () => {
+  const { convertRegex } = await loadConverter()
+  const space = compile(convertRegex('^key\\s*=\\s(\\S+)$'))
+  assert.equal(space.exec('key = value')[1], 'value')
+  assert.ok(space.test('key\t=\fvalue'))
+  // JavaScript's own \s would accept a no-break space and a vertical tab; RE2's does not.
+  assert.ok(!space.test('key\u00a0= value'))
+  assert.ok(!space.test('key =\u000bvalue'))
+  // So \S accepts them as part of the value, as in RE2.
+  assert.equal(space.exec('key = a\u00a0b')[1], 'a\u00a0b')
+  const inClass = compile(convertRegex('^[\\s\\S-]+$'))
+  assert.ok(inClass.test('-----BEGIN KEY-----\nabc\u00a0\r\n'))
+  const spaceOrQuote = compile(convertRegex("^[\\s'\"]{1,3}$"))
+  assert.ok(spaceOrQuote.test(" '"))
+  assert.ok(!spaceOrQuote.test('\u00a0'))
+  // A dash right after a set in a class is a literal in RE2, never a range.
+  const dash = compile(convertRegex('^[a\\s-x]+$'))
+  assert.ok(dash.test('a-x '))
+  assert.ok(!dash.test('m'))
+})
+
 test('constructs with no translation fail the conversion instead of passing through', async () => {
   const { convertRegex, ConversionError } = await loadConverter()
-  for (const pattern of ['\\pL', '\\p{Greek}', '\\Qa.b\\E', 'a(?=b)', '(?<!a)b', '(?U)a+', '(a)\\1', '[[:^alpha:]]', '[[:nope:]]', '\\x{41}', '\\C', 'a)', '(a', '[a', '\\'])
+  for (const pattern of ['\\pL', '\\p{Greek}', '\\Qa.b\\E', 'a(?=b)', '(?<!a)b', '(?U)a+', '(a)\\1', '[[:^alpha:]]', '[[:nope:]]', '\\x{41}', '\\C', '(?m)^a', 'a(?m:$)', '[a-\\d]', '[a-[:digit:]]', 'a)', '(a', '[a', '\\'])
     assert.throws(() => convertRegex(pattern), ConversionError, pattern)
 })
 
@@ -323,7 +345,7 @@ test('the TOML reader: the subset gitleaks uses, and an error with its line for 
 })
 
 test('the command line: pinned sha256, --check, --input, usage', async () => {
-  const { main, serializeSecretRules, buildSecretRules } = await loadConverter()
+  const { main } = await loadConverter()
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cmt-secret-rules-'))
   try {
     const rulesPath = path.join(directory, 'gitleaks.json')
@@ -348,7 +370,7 @@ test('the command line: pinned sha256, --check, --input, usage', async () => {
     assert.equal(fetched, 3)
 
     // A committed file that differs fails --check.
-    fs.writeFileSync(rulesPath, serializeSecretRules(buildSecretRules(fixtureToml, [{ id: 'adobe-client-id', reason: 'test' }])))
+    fs.writeFileSync(rulesPath, committedRules.replace('"count": 222', '"count": 221'))
     outcome = await mutedConsole(() => main(['--check'], options))
     assert.equal(outcome.value, 1)
     assert.match(outcome.lines.join('\n'), /differs/)
