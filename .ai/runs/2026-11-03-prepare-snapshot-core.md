@@ -31,18 +31,20 @@ Ship Step 3 of the spec's Implementation Plan: the internal entry point `prepare
 
 ## Progress
 
+PR: #4
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` : <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Code
 
-- [ ] 1.1 Git reads and the byte-exact runner
-- [ ] 1.2 Deny list and entry rules
-- [ ] 1.3 Snapshot, worktree listing, snapshotId and the prepare() entry point
+- [x] 1.1 Git reads and the byte-exact runner : 7fb85ab
+- [x] 1.2 Deny list and entry rules : 9da3d6e
+- [x] 1.3 Snapshot, worktree listing, snapshotId and the prepare() entry point : c1b8eb9
 
 ### Phase 2: Tests
 
-- [ ] 2.1 Fixture app builder and the Step 3 tests
+- [x] 2.1 Fixture app builder and the Step 3 tests : 0fb3694
 
 ### Phase 3: Docs
 
-- [ ] 3.1 docs/guide.md, CHANGELOG.md, AGENTS.md and the spec review note
+- [x] 3.1 docs/guide.md, CHANGELOG.md, AGENTS.md and the spec review note : 90c4f72
