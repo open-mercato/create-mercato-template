@@ -41,3 +41,4 @@ PR: #7
 ### Phase 2: Docs
 
 - [x] 2.1 docs/guide.md, CHANGELOG.md and AGENTS.md : 66aa2a2
+- [x] Post-review fix: RE2 \s and \S, m flag and set-ended ranges refused, stale skips fail, remaining differences documented : b224b5c
