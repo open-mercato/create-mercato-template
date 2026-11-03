@@ -27,15 +27,15 @@ Ship Step 2 of the spec's Implementation Plan: `scripts/build-stock-table.mts`, 
 
 ## Progress
 
-PR: (pending)
+PR: #3
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` : <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Code
 
-- [ ] 1.1 Shared parsers, stock lookups, generator, table and workflow
-- [ ] 1.2 Tests and the 0.9.0 fixture
+- [x] 1.1 Shared parsers, stock lookups, generator, table and workflow : 3d81b45
+- [x] 1.2 Tests and the 0.9.0 fixture : 1dd38f9
 
 ### Phase 2: Docs
 
-- [ ] 2.1 docs/guide.md, CHANGELOG.md, AGENTS.md and the spec review note
+- [x] 2.1 docs/guide.md, CHANGELOG.md, AGENTS.md and the spec review note : c1acb30
