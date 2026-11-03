@@ -23,6 +23,9 @@ test('npm pack ships only the files entries of package.json', () => {
   assert.ok(files.includes('LICENSE'))
   // The stock table ships next to the compiled lookups; its generator does not.
   assert.ok(files.includes('dist/stock/table.json'))
+  // So do the bundled gitleaks rules; their converter (scripts/) and the skipped list do not.
+  assert.ok(files.includes('dist/rules/gitleaks.json'))
+  assert.ok(files.includes('dist/rules/gitleaks.js'))
   // src/ is not shipped, so a source map would point at missing files.
   assert.deepEqual(files.filter((file) => file.endsWith('.map')), [])
   assert.deepEqual(files.filter((file) => !allowed.test(file)), [])

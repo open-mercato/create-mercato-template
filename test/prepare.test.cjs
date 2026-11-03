@@ -129,6 +129,12 @@ test('the report: files, notices code-only and checks-incomplete, written last n
   assert.deepEqual(report.notices.map((notice) => notice.code), ['code-only', 'checks-incomplete'])
   assert.equal(report.schema, 1)
   assert.deepEqual(report.tool.name, 'create-mercato-template')
+  // Spec Step 6: the bundled gitleaks rules the report names.
+  assert.deepEqual(report.tool.rules, {
+    source: { name: 'gitleaks', tag: 'v8.30.1', path: 'config/gitleaks.toml', sha256: 'e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf' },
+    count: 222,
+    skipped: [],
+  })
   assert.equal(report.createdAt, '2026-11-03T12:00:00.000Z')
   assert.deepEqual(report.source, { head: git(app, ['rev-parse', 'HEAD']).toString().trim(), dirty: false, includeUncommitted: false })
   assert.deepEqual(report.findings, [])
