@@ -18,7 +18,7 @@ const {
   resolveDependency,
   versionLine,
 } = require('../dist/lockfile.js')
-const { checkRoot, isYarn4 } = require('../dist/policy/root.js')
+const { checkRoot, isPlainRange, isYarn4 } = require('../dist/policy/root.js')
 const { coreVersion, createFixtureRepo, fixtureFiles, gitEnvironment, tempDir } = require('./helpers/fixture-app.cjs')
 
 const fixedNow = () => new Date('2026-11-03T12:00:00.000Z')
@@ -206,6 +206,38 @@ test('a stale lockfile (package.json asks for a version yarn.lock lacks): root-o
   assertErrors(outcome, ['root-om-unresolved package.json'])
   assert.match(outcome.report.findings[0].message, /out of date/)
   assert.equal(outcome.report.openMercato, null)
+})
+
+test('a git or URL range is looked up by name, and the range never appears in a finding', () => {
+  const secret = `ghp_${'Z'.repeat(36)}`
+  const range = `git+https://x-access-token:${secret}@github.com/acme/ui.git`
+  const known = createFixtureRepo({
+    'package.json': packageJson({ dependencies: { '@open-mercato/core': coreVersion, '@open-mercato/ui': range } }),
+    'yarn.lock': fixtureFiles['yarn.lock'] + lockEntry('@open-mercato/ui', coreVersion),
+  })
+  assert.deepEqual(run(known).report.findings, [])
+  const stale = createFixtureRepo({
+    'package.json': packageJson({ dependencies: { '@open-mercato/core': coreVersion, '@open-mercato/ui': `0.9.1 || ${secret}` } }),
+    'yarn.lock': fixtureFiles['yarn.lock'] + lockEntry('@open-mercato/ui', coreVersion),
+  })
+  const outcome = run(stale)
+  assertErrors(outcome, ['root-om-unresolved package.json'])
+  assert.doesNotMatch(JSON.stringify(outcome.report), new RegExp(secret))
+  assert.equal(fs.readFileSync(path.join(outcome.out, 'report.json'), 'utf8').includes(secret), false)
+  assert.equal(isPlainRange('^0.9.0'), true)
+  assert.equal(isPlainRange('npm:@acme/x@1'), true)
+  assert.equal(isPlainRange('acme/ui'), false)
+  assert.equal(isPlainRange('github:acme/ui'), false)
+})
+
+test('a framework package with no lockfile edge counts when it has an entry on core line', () => {
+  const app = createFixtureRepo({
+    'package.json': packageJson({
+      dependencies: { '@open-mercato/core': coreVersion, '@open-mercato/search': '0.8.0', '@open-mercato/queue': coreVersion },
+    }),
+    'yarn.lock': fixtureFiles['yarn.lock'] + lockEntry('@open-mercato/search', '0.8.0') + lockEntry('@open-mercato/queue', coreVersion) + lockEntry('@open-mercato/search', coreVersion),
+  })
+  assertErrors(run(app), ['root-om-mixed-lines yarn.lock'])
 })
 
 test('a dependency that package.json resolutions overrides is looked up by name', () => {

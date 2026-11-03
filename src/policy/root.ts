@@ -87,6 +87,13 @@ function resolutionNames(packageJson: Json | null): Set<string> {
   return names
 }
 
+/** True for a registry range or a Yarn protocol whose descriptor Yarn writes as is (`npm:`, `workspace:`, `link:`, `portal:`, `file:`, `patch:`). */
+export function isPlainRange(range: string): boolean {
+  const protocol = /^([a-z][a-z0-9+.-]*):/i.exec(range)?.[1]
+  if (protocol) return ['npm', 'workspace', 'link', 'portal', 'file', 'patch'].includes(protocol)
+  return !range.includes('/')
+}
+
 function stringRecord(value: unknown): Record<string, string> | null {
   if (!isObject(value)) return null
   return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
@@ -170,7 +177,10 @@ export function checkRoot(contents: ReadonlyMap<string, Buffer>): RootResult {
   if (lockfile === null) return result
 
   const overridden = resolutionNames(packageJson)
-  const rangeOf = (name: string, range: string | null) => (overridden.has(name) ? null : range)
+  // A range Yarn may record under another descriptor (an override, a git or
+  // URL range) is looked up by name only. The range itself is never printed:
+  // a URL range can hold a credential.
+  const rangeOf = (name: string, range: string | null) => (overridden.has(name) || (range !== null && !isPlainRange(range)) ? null : range)
   if (packageJson !== null)
     for (const dependency of omDependencies(packageJson)) {
       if (resolveDependency(lockfile, dependency.name, rangeOf(dependency.name, dependency.range)) !== null) continue
@@ -180,7 +190,7 @@ export function checkRoot(contents: ReadonlyMap<string, Buffer>): RootResult {
           'root-om-unresolved',
           'package.json',
           known
-            ? `${dependency.name}@${dependency.range} has no entry in yarn.lock: yarn.lock is out of date. Run yarn install and commit yarn.lock.`
+            ? `${dependency.name}: the package.json range has no entry in yarn.lock: yarn.lock is out of date. Run yarn install and commit yarn.lock.`
             : `${dependency.name} has no entry in yarn.lock. Run yarn install and commit yarn.lock.`,
         ),
       )
@@ -189,6 +199,11 @@ export function checkRoot(contents: ReadonlyMap<string, Buffer>): RootResult {
   // Only the framework's lockstep set counts: a package released on its own
   // line (such as @open-mercato/client) is not a mixed line.
   const framework = frameworkNames(lockfile, scope, corePackage)
+  // A framework package with no lockfile edge to core still counts when it
+  // has an entry on core's line: lockstep packages release together.
+  const coreLines = new Set(entriesNamed(lockfile, corePackage).filter(isRegistryEntry).map((entry) => versionLine(entry.version)))
+  for (const entry of lockfile.entries)
+    if (entry.name.startsWith(scope) && isRegistryEntry(entry) && coreLines.has(versionLine(entry.version))) framework.add(entry.name)
   const lines = new Map<string, Set<string>>()
   for (const entry of lockfile.entries) {
     if (!framework.has(entry.name) || !isRegistryEntry(entry)) continue
