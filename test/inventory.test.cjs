@@ -661,3 +661,32 @@ test('the dedupe loop stays linear: 20,000 official entries', () => {
 test('slugify drops the accents NFKD splits off', () => {
   assert.equal(slugify('Résumé App'), 'resume-app')
 })
+
+test('reads of the list stay quiet; a change to its entries through a read is unparsed', () => {
+  const quiet = [
+    'for (const m of enabledModules) console.log(m.id)',
+    "if (typeof enabledModules === 'object' && Array.isArray(enabledModules)) console.log(JSON.stringify(enabledModules))",
+    'export const ids = enabledModules.map((m) => m.id)',
+  ]
+  for (const line of quiet) assert.deepEqual(inventoryOf({ 'src/modules.ts': modulesTs(`${line}\n`) }).unparsed, [], line)
+  const writes = [
+    "enabledModules.find((m) => m.id === 'auth')!.id = 'b'",
+    "enabledModules.at(0)!.id = 'b'",
+    "enabledModules.map((m) => { m.id = 'b'; return m })",
+    "for (const m of enabledModules.values()) m.id = 'b'",
+    "for (const m of enabledModules) Object.assign(m, { id: 'b' })",
+    "const first = enabledModules.find((m) => m.id === 'auth'); if (first) first.id = 'b'",
+  ]
+  for (const line of writes) {
+    const inventory = inventoryOf({ 'src/modules.ts': modulesTs(`${line}\n`) })
+    assert.deepEqual(
+      inventory.unparsed.map((item) => item.line),
+      [6],
+      line,
+    )
+    assert.deepEqual(
+      inventory.entries.map((entry) => entry.id),
+      ['auth'],
+    )
+  }
+})

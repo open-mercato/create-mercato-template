@@ -594,12 +594,25 @@ class Reader {
     )
       top = top.parent
     const user = top.parent
-    if (ts.isExportAssignment(user) || ts.isSpreadElement(user)) return
+    if (ts.isExportAssignment(user) || ts.isSpreadElement(user) || ts.isTypeOfExpression(user)) return
+    // A loop that only reads the entries.
+    if (ts.isForOfStatement(user) && user.expression === top) {
+      if (loopWritesEntries(user)) this.unparsed(this.line(user), 'a loop that changes entries of the module list')
+      return
+    }
+    // A pure global check: `Array.isArray(list)`, `JSON.stringify(list)`.
+    if (ts.isCallExpression(user) && user.arguments.length === 1 && isPureGlobalCall(user.expression)) return
     if (ts.isPropertyAccessExpression(user) && user.expression === top) {
       const method = user.name.text
       const call = user.parent
       if (ts.isCallExpression(call) && call.expression === user) {
-        if (this.handled.has(call) || readOnlyMethods.has(method)) return
+        if (this.handled.has(call)) return
+        if (readOnlyMethods.has(method)) {
+          // The entries are objects: a callback, or the returned entry, can still rewrite an id.
+          if (call.arguments.some((argument) => callbackWritesParameters(argument)) || resultIsWritten(call))
+            this.unparsed(this.line(call), 'a change to entries of the module list the inventory cannot follow')
+          return
+        }
         this.unparsed(this.line(call), mutatingMethods.has(method) ? `a ${method}() on the module list in a form the inventory cannot read` : 'a method call on the module list the inventory cannot follow')
         return
       }
@@ -617,6 +630,89 @@ class Reader {
     }
     this.unparsed(this.line(user), 'a use of the module list the inventory cannot follow')
   }
+}
+
+/** `Array.isArray` or `JSON.stringify`. */
+function isPureGlobalCall(callee: ts.Expression): boolean {
+  return ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && ((callee.expression.text === 'Array' && callee.name.text === 'isArray') || (callee.expression.text === 'JSON' && callee.name.text === 'stringify'))
+}
+
+/** The root identifier of an access chain: `m` in `m.id`, `m['id']`, `m.a.b`. */
+function accessRoot(node: ts.Expression): string | null {
+  let current = unwrap(node)
+  while (ts.isPropertyAccessExpression(current) || ts.isElementAccessExpression(current)) current = unwrap(current.expression)
+  return ts.isIdentifier(current) ? current.text : null
+}
+
+/** True when `body` assigns to, deletes or increments a property reached through one of `names`. */
+function writesThrough(body: ts.Node, names: ReadonlySet<string>): boolean {
+  const visit = (node: ts.Node): boolean => {
+    let target: ts.Expression | null = null
+    if (ts.isBinaryExpression(node) && isAssignmentOperator(node.operatorToken.kind)) target = node.left
+    else if (ts.isDeleteExpression(node)) target = node.expression
+    else if ((ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) && [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator))
+      target = node.operand
+    if (target !== null) {
+      const value = unwrap(target)
+      if ((ts.isPropertyAccessExpression(value) || ts.isElementAccessExpression(value)) && names.has(accessRoot(value) ?? '')) return true
+    }
+    // Passing an entry on (`Object.assign(m, ...)`, `rename(m)`) may change it too.
+    if (ts.isCallExpression(node) && node.arguments.some((argument) => {
+      const value = unwrap(argument)
+      return ts.isIdentifier(value) && names.has(value.text)
+    }))
+      return true
+    return ts.forEachChild(node, visit) ?? false
+  }
+  return visit(body)
+}
+
+function parameterNames(fn: ts.SignatureDeclarationBase): Set<string> {
+  const names = new Set<string>()
+  const add = (name: ts.BindingName): void => {
+    if (ts.isIdentifier(name)) names.add(name.text)
+    else for (const element of name.elements) if (!ts.isOmittedExpression(element)) add(element.name)
+  }
+  for (const parameter of fn.parameters) add(parameter.name)
+  return names
+}
+
+/** True when an argument is a callback that writes through its parameters (`(m) => { m.id = 'x' }`). */
+function callbackWritesParameters(argument: ts.Expression): boolean {
+  const value = unwrap(argument)
+  if (!ts.isArrowFunction(value) && !ts.isFunctionExpression(value)) return false
+  return writesThrough(value.body, parameterNames(value))
+}
+
+/** True when a call's result is written through (`list.find(...)!.id = 'x'`) or iterated by a loop that writes its entries. */
+function resultIsWritten(call: ts.CallExpression): boolean {
+  let top: ts.Node = call
+  while (ts.isParenthesizedExpression(top.parent) || ts.isAsExpression(top.parent) || ts.isNonNullExpression(top.parent) || ts.isSatisfiesExpression(top.parent))
+    top = top.parent
+  const user = top.parent
+  if (ts.isForOfStatement(user) && user.expression === top) return loopWritesEntries(user)
+  if ((ts.isPropertyAccessExpression(user) || ts.isElementAccessExpression(user)) && user.expression === top) {
+    let outer: ts.Node = user
+    while ((ts.isPropertyAccessExpression(outer.parent) || ts.isElementAccessExpression(outer.parent)) && outer.parent.expression === outer) outer = outer.parent
+    return isAssignmentTarget(outer as ts.Expression) || ts.isDeleteExpression(outer.parent)
+  }
+  // Kept in a variable: `const m = list.find(...)`, then `m.id = 'x'`.
+  if (ts.isVariableDeclaration(user) && ts.isIdentifier(user.name)) {
+    const scope = user.getSourceFile()
+    return writesThrough(scope, new Set([user.name.text]))
+  }
+  return false
+}
+
+/** True when a `for...of` body writes through its loop variable. */
+function loopWritesEntries(loop: ts.ForOfStatement): boolean {
+  const list = loop.initializer
+  const names = new Set<string>()
+  if (ts.isVariableDeclarationList(list)) {
+    for (const declaration of list.declarations) if (ts.isIdentifier(declaration.name)) names.add(declaration.name.text)
+  } else if (ts.isIdentifier(list)) names.add(list.text)
+  // A destructuring loop variable, or any other target, is not followed.
+  return names.size === 0 || writesThrough(loop.statement, names)
 }
 
 /** True when the statements declare a variable, function or class of this name at their own level. */
