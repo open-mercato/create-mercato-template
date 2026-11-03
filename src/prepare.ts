@@ -4,6 +4,8 @@ import { toolVersion } from './cli.js'
 import { type Executor, run } from './common.js'
 import { CliError, exitCodes } from './errors.js'
 import { GitReader, checkGit, isDubiousOwnership, unsafeDirectoryError } from './git.js'
+import { readInventory } from './inventory.js'
+import { type ReportModule, buildManifest, manifestPath, manifestRecord, resolveModules, serializeManifest } from './manifest.js'
 import type { Finding } from './policy/entries.js'
 import { type OpenMercato, type RootResult, checkRoot } from './policy/root.js'
 import {
@@ -12,6 +14,7 @@ import {
   type Snapshot,
   type Uncommitted,
   buildSnapshot,
+  compareUtf8,
   computeSnapshotId,
   sortFindings,
   writeOut,
@@ -21,6 +24,7 @@ import { matchStock } from './stock.js'
 export type { Finding } from './policy/entries.js'
 export type { Excluded, FileRecord, Uncommitted } from './snapshot.js'
 export type { OpenMercato } from './policy/root.js'
+export type { Manifest, ReportModule } from './manifest.js'
 
 /**
  * The internal entry point of `prepare` (spec Step 3). The CLI command keeps
@@ -65,8 +69,10 @@ export type Report = {
   openMercato: OpenMercato | null
   uncommitted: Uncommitted[]
   excluded: Excluded[]
-  /** Q6. `dependency`: `yarn.lock` resolves `@open-mercato/enterprise`. Step 5 adds `modules`. */
-  enterprise: { dependency: boolean }
+  /** The module inventory of `src/modules.ts`: the manifest entries with their line, and what could not be read. */
+  modules: { entries: ReportModule[]; unparsed: Array<{ line: number; reason: string }> }
+  /** Q6. `dependency`: `yarn.lock` resolves `@open-mercato/enterprise`; `modules`: the registered modules from it, with their `when`. */
+  enterprise: { dependency: boolean; modules: Array<{ id: string; when?: string }> }
   totals: { files: number; bytes: number }
 }
 
@@ -92,7 +98,7 @@ const codeOnly: Notice = {
 const checksIncomplete: Notice = {
   code: 'checks-incomplete',
   detail:
-    'This version runs the snapshot core and the root checks only. The module inventory and manifest, the secret scan, the opaque file check, the warnings and the regenerated .env.example come in later versions; the root .env.example is excluded until then.',
+    'This version runs the snapshot core, the root checks, the module inventory and the manifest only. The secret scan, the opaque file check, the other warnings and notices, the declared env in the manifest and the regenerated .env.example come in later versions; the root .env.example is excluded until then.',
 }
 
 const uncommittedNotExported: Notice = {
@@ -239,8 +245,23 @@ export function prepare(options: PrepareOptions): PrepareResult {
       : buildSnapshot({ git, appReal, head: base.head, includeUncommitted })
 
   const root: RootResult | null = base.head === null ? null : checkRoot(snapshot.contents)
+  let modules: Report['modules'] = { entries: [], unparsed: [] }
+  let enterpriseModules: Report['enterprise']['modules'] = []
   if (root) {
     snapshot.findings.push(...root.findings)
+    const inventory = readInventory(snapshot.contents)
+    const resolved = resolveModules(inventory, root.packageJson, root.lockfile)
+    modules = resolved.report
+    enterpriseModules = resolved.enterprise
+    const { manifest, findings } = buildManifest({
+      packageJson: root.packageJson,
+      appName: path.basename(appReal),
+      openMercato: root.openMercato,
+      modules: resolved.report.entries,
+      version: toolVersion(),
+    })
+    snapshot.findings.push(...inventory.findings, ...resolved.findings, ...findings)
+    addManifest(snapshot, serializeManifest(manifest))
     sortFindings(snapshot.findings)
   }
   const errors = snapshot.findings.filter((item) => item.level === 'error')
@@ -263,11 +284,28 @@ export function prepare(options: PrepareOptions): PrepareResult {
     openMercato: root?.openMercato ?? null,
     uncommitted: snapshot.uncommitted,
     excluded: snapshot.excluded,
-    enterprise: root?.enterprise ?? { dependency: false },
+    modules,
+    enterprise: { dependency: root?.enterprise.dependency ?? false, modules: enterpriseModules },
     totals: { files: snapshot.files.length, bytes: snapshot.files.reduce((sum, file) => sum + file.size, 0) },
   }
   writeOut(out, snapshot.files, snapshot.contents, report, snapshotId !== null)
   return { exitCode: errors.length === 0 ? 0 : 1, failures: errors, out, snapshotId, report }
+}
+
+/**
+ * Puts the generated manifest into the file set, in place of a
+ * `mercato-template.json` from the source app. A source path that differs
+ * from it only in case would overwrite it on macOS and Windows:
+ * `path-case-collision`.
+ */
+function addManifest(snapshot: Snapshot, content: Buffer): void {
+  snapshot.files = snapshot.files.filter((file) => file.path !== manifestPath)
+  for (const file of snapshot.files)
+    if (file.path.toLowerCase() === manifestPath)
+      snapshot.findings.push({ rule: 'path-case-collision', level: 'error', path: file.path, message: `Differs from the generated ${manifestPath} only in case.` })
+  snapshot.files.push(manifestRecord(content))
+  snapshot.files.sort((left, right) => compareUtf8(left.path, right.path))
+  snapshot.contents.set(manifestPath, content)
 }
 
 function stockOf(openMercato: OpenMercato | null): Report['stock'] {

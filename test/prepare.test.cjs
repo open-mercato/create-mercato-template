@@ -239,7 +239,8 @@ test('a dirty worktree: changes are listed and not exported by default', () => {
   assert.ok(treeFiles(out).includes('src/gone.ts'))
   assert.ok(!treeFiles(out).includes('src/staged.ts'))
   assert.ok(!treeFiles(out).includes('src/untracked.ts'))
-  assert.ok(report.files.every((file) => file.origin === 'tree'))
+  // Every exported file comes from the pinned tree, except the generated manifest.
+  assert.ok(report.files.every((file) => file.origin === 'tree' || (file.origin === 'generated' && file.path === 'mercato-template.json')))
   assert.ok(!seen.some((item) => item.endsWith(`${path.sep}.env`)), 'the ignored .env was read')
 })
 
@@ -419,10 +420,11 @@ test('computeSnapshotId: sorted <path>\\t<mode>\\t<sha256>\\n lines, sha256 (gol
 })
 
 test('snapshotId equals a golden value for the fixture app', () => {
-  // Changes when the fixture app or the generated files change (Step 5 adds
-  // mercato-template.json, Step 8 the regenerated .env.example).
+  // Changes when the fixture app or the generated files change: Step 5 added
+  // mercato-template.json (whose createdWith.version is the package version,
+  // so a version bump changes it too), Step 8 adds the regenerated .env.example.
   const { result } = run(createFixtureRepo())
-  assert.equal(result.snapshotId, '3924ec20b225f0a9fcb905770238b61967246b271f06cacc1f323e83c97b9711')
+  assert.equal(result.snapshotId, 'f2177b5023bff572ad956b63a68a79f4460d14f5fa688ada893941b7a7ac1d12')
   assert.equal(result.snapshotId, computeSnapshotId(result.report.files))
 })
 

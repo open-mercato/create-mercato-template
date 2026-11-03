@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://modules.openmercato.com/schema/mercato-template-1.json",
+  "$comment": "DRAFT. Not the published catalog file: the catalog has not published mercato-template-1.json yet (2026-11-03). Written from the catalog spec (open-mercato/modules docs/specs/2026-10-29-templates.md, section 'In-repo manifest: mercato-template.json') and the patterns of its lib/schema/common.ts at 5a591d63c666e0d719bb9ee70d6f3ae644407d34. Replace with the published file before the first release (spec Step 12). See SOURCE.md.",
+  "type": "object",
+  "properties": {
+    "schema": { "const": 1 },
+    "name": { "type": "string", "maxLength": 214, "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+    "description": { "type": "string", "minLength": 1, "maxLength": 350 },
+    "openMercato": { "type": "string", "pattern": "^\\d+\\.\\d+\\.x$" },
+    "env": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$" },
+          "description": { "type": "string", "minLength": 1, "maxLength": 240 },
+          "link": { "type": "string", "maxLength": 300, "pattern": "^https://" }
+        },
+        "required": ["name"],
+        "additionalProperties": false
+      }
+    },
+    "modules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "maxLength": 64, "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$" },
+          "from": { "type": "string", "minLength": 1, "maxLength": 214 },
+          "package": {
+            "type": "string",
+            "pattern": "^(?:@[a-z0-9-~][a-z0-9-._~]*\\/)?[a-z0-9-~][a-z0-9-._~]*@[^\\s@]+$"
+          },
+          "when": {
+            "type": "string",
+            "pattern": "^(?:custom|!?(?:[A-Z][A-Z0-9_]{1,63}|module:[a-z][a-z0-9]*(?:_[a-z0-9]+)*)(?: && !?(?:[A-Z][A-Z0-9_]{1,63}|module:[a-z][a-z0-9]*(?:_[a-z0-9]+)*))*)$"
+          }
+        },
+        "required": ["id", "from"],
+        "additionalProperties": false
+      }
+    },
+    "createdWith": {
+      "type": "object",
+      "properties": {
+        "tool": { "const": "create-mercato-template" },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$" }
+      },
+      "required": ["tool", "version"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["schema", "name", "modules", "createdWith"],
+  "additionalProperties": false
+}

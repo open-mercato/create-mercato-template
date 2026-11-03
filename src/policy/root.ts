@@ -7,6 +7,7 @@
  * packages and versions, never other file content.
  */
 import {
+  type LockEntry,
   type Lockfile,
   LockfileError,
   descriptorName,
@@ -29,12 +30,16 @@ export type RootResult = {
   findings: Finding[]
   /** The pinned `@open-mercato/core` from `yarn.lock`, or null when it is not pinned. */
   openMercato: OpenMercato | null
-  /** `enterprise.dependency`: `yarn.lock` resolves `@open-mercato/enterprise` (Q6). Step 5 adds `modules`. */
+  /** `enterprise.dependency`: `yarn.lock` resolves `@open-mercato/enterprise` (Q6). `prepare()` adds `modules` from the module inventory. */
   enterprise: { dependency: boolean }
   /** `package.json` `packageManager`, or null. */
   packageManager: string | null
   /** `package.json` `engines` (string values only), or null. */
   engines: Record<string, string> | null
+  /** The root `package.json` object, or null when it cannot be read. For the module inventory (Step 5). */
+  packageJson: Record<string, unknown> | null
+  /** The parsed `yarn.lock`, or null when it is missing or cannot be read. */
+  lockfile: Lockfile | null
 }
 
 type Json = Record<string, unknown>
@@ -105,12 +110,50 @@ export function isYarn4(packageManager: unknown): boolean {
 }
 
 /**
+ * The range to look a dependency up by in `yarn.lock`: the `package.json`
+ * range, or null (look up by name) when Yarn may record it under another
+ * descriptor (an override in `resolutions`, a git or URL range). The range
+ * itself is never printed: a URL range can hold a credential.
+ */
+function rangeLookup(packageJson: Json | null): (name: string, range: string | null) => string | null {
+  const overridden = resolutionNames(packageJson)
+  return (name, range) => (overridden.has(name) || (range !== null && !isPlainRange(range)) ? null : range)
+}
+
+/**
+ * The lockfile entry of a module's npm package (spec, Module inventory item
+ * 7): first the descriptor from `package.json` (`dependencies`, then
+ * `devDependencies`) looked up in `yarn.lock`; else the single lockfile
+ * entry for that name. Null when neither gives one entry.
+ */
+export function resolveModulePackage(packageJson: Record<string, unknown> | null, lockfile: Lockfile, name: string): LockEntry | null {
+  const rangeOf = rangeLookup(packageJson)
+  for (const field of ['dependencies', 'devDependencies']) {
+    const block = packageJson?.[field]
+    if (!isObject(block) || !Object.hasOwn(block, name)) continue
+    const range = block[name]
+    const entry = resolveDependency(lockfile, name, rangeOf(name, typeof range === 'string' ? range : null))
+    if (entry !== null) return entry
+  }
+  const named = entriesNamed(lockfile, name)
+  return named.length === 1 ? named[0] : null
+}
+
+/**
  * Runs the root checks over the snapshot. `contents` maps every exported
  * path to its bytes.
  */
 export function checkRoot(contents: ReadonlyMap<string, Buffer>): RootResult {
   const findings: Finding[] = []
-  const result: RootResult = { findings, openMercato: null, enterprise: { dependency: false }, packageManager: null, engines: null }
+  const result: RootResult = {
+    findings,
+    openMercato: null,
+    enterprise: { dependency: false },
+    packageManager: null,
+    engines: null,
+    packageJson: null,
+    lockfile: null,
+  }
 
   for (const path of contents.keys())
     if (path.endsWith('.template'))
@@ -127,6 +170,7 @@ export function checkRoot(contents: ReadonlyMap<string, Buffer>): RootResult {
     )
 
   const packageJson = readJson(contents.get('package.json'))
+  result.packageJson = packageJson
   if (packageJson === null) {
     findings.push(
       error(
@@ -175,12 +219,9 @@ export function checkRoot(contents: ReadonlyMap<string, Buffer>): RootResult {
     }
   }
   if (lockfile === null) return result
+  result.lockfile = lockfile
 
-  const overridden = resolutionNames(packageJson)
-  // A range Yarn may record under another descriptor (an override, a git or
-  // URL range) is looked up by name only. The range itself is never printed:
-  // a URL range can hold a credential.
-  const rangeOf = (name: string, range: string | null) => (overridden.has(name) || (range !== null && !isPlainRange(range)) ? null : range)
+  const rangeOf = rangeLookup(packageJson)
   if (packageJson !== null)
     for (const dependency of omDependencies(packageJson)) {
       if (resolveDependency(lockfile, dependency.name, rangeOf(dependency.name, dependency.range)) !== null) continue
