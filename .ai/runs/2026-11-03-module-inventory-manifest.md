@@ -43,21 +43,23 @@ Ship Step 5 of the spec's Implementation Plan: the static module inventory of th
 
 ## Progress
 
+PR: #6
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` : <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fixtures
 
-- [ ] 1.1 Vendored scaffold fixtures and the draft manifest schema
+- [x] 1.1 Vendored scaffold fixtures and the draft manifest schema : ad97699
 
 ### Phase 2: Code
 
-- [ ] 2.1 Module inventory (src/inventory.ts)
-- [ ] 2.2 Manifest and prepare() wiring (src/manifest.ts, src/prepare.ts, src/policy/root.ts)
+- [x] 2.1 Module inventory (src/inventory.ts) : 2d9ec0f
+- [x] 2.2 Manifest and prepare() wiring (src/manifest.ts, src/prepare.ts, src/policy/root.ts) : 49f5746
 
 ### Phase 3: Tests
 
-- [ ] 3.1 Step 5 tests
+- [x] 3.1 Step 5 tests : 7a3871a
 
 ### Phase 4: Docs
 
-- [ ] 4.1 docs/guide.md, CHANGELOG.md and AGENTS.md
+- [x] 4.1 docs/guide.md, CHANGELOG.md and AGENTS.md : 837e7d3
