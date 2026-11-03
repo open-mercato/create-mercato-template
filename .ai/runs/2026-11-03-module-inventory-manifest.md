@@ -31,6 +31,8 @@ Ship Step 5 of the spec's Implementation Plan: the static module inventory of th
 - The inventory binding is the first exported `const` (or `let`) array that holds an object literal with an `id` property.
 - An entry with an `id` that is not a string literal, or a string that is not a catalog module id, is `modules-unparsed` (listed, never dropped silently).
 - A reference to the binding that can change it outside the recognized constructs (passed to a function, assigned, a mutating method other than a recognized `push`/`unshift`) is one `modules-unparsed` warning with its line. Read-only uses (`some`, `map`, `length`, `export`) are ignored.
+- After review: a `from` that is neither `@app`, an npm name nor path-like (a URL that may hold a credential, a line break) is not copied into the manifest; the entry is `modules-unparsed` instead of a kept `module-from-unknown` entry. The spec's rule row keeps the entry for every unknown `from`; this narrows it so no credential URL reaches the published manifest before the Step 7 scan exists. Path-like unknown values (`./modules/x`, `~/x`) are kept with `module-from-unknown` as the spec says.
+- After review: an official entry whose id was pushed earlier under a condition is dropped by the dedupe guard, as Q5's "first entry per id" reads literally.
 - Terms are deduplicated when nested conditions repeat one (`A` inside `if (A && B)` gives `A && B`).
 - Official module entries read through the loop carry the line of the `for` statement in `src/modules.ts`.
 - `package`: only when the lockfile was read; with no readable `yarn.lock` the root rule already reports the cause, so no `module-package-unresolved` is added. Several lockfile entries for a name not in `package.json` resolve to none, as spec item 7 says ("a single lockfile entry").
@@ -64,3 +66,4 @@ PR: #6
 
 - [x] 4.1 docs/guide.md, CHANGELOG.md and AGENTS.md : 837e7d3
 - [x] Post-review fix: deep nesting is unparsed, every unsafe use of the list unparsed (wrappers, aliases, element access, loops, shadowing, self-spread), linear dedupe, path-like unknown from, no identifiers in reasons, slug accents : ca8d79b
+- [x] Post-review fix: read-only uses of the list are quiet (for...of, typeof, Array.isArray); changes to entries through read-only methods, their callbacks or results are unparsed : 39d2ca3
