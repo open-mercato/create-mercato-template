@@ -144,6 +144,28 @@ test('a stock compose URL with only the database name changed: credential-url wi
   assert.match(report.findings[0].message, /\$\{POSTGRES_PASSWORD\}/)
 })
 
+test('passwords with a raw /, ? or #: credential-url on the right line (issue #10)', () => {
+  const text = join(
+    '# Services.\n',
+    'REDIS_URL=redis://:abc', '#123@host\n',
+    'NPM=https://registry.npmjs.org/@scope/pkg\n',
+    'MAIL=https://x.com/?to=a@b.com\n',
+    'DATABASE_URL=postgres://u:a', '/b@h/db\n',
+  )
+  const findings = scanCredentialUrls('config.env', text)
+  assert.deepEqual(
+    findings.map((finding) => [finding.rule, finding.level, finding.path, finding.line]),
+    [
+      ['credential-url', 'error', 'config.env', 2],
+      ['credential-url', 'error', 'config.env', 5],
+    ],
+  )
+  assert.equal(JSON.stringify(findings).includes('abc#123'), false)
+  assert.equal(JSON.stringify(findings).includes('a/b'), false)
+  // A variable-only password is still no credential, also with a raw / after it.
+  assert.deepEqual(scanCredentialUrls('a.yml', 'url: postgres://${U}:${P}@db/app/x@y\n'), [])
+})
+
 test('variable-only passwords are not credentials; a variable with a default is', () => {
   assert.deepEqual(scanCredentialUrls('a.yml', 'url: postgres://${U}:${P}@db/app\n'), [])
   assert.deepEqual(scanCredentialUrls('a.yml', 'url: postgres://$U:$P@db/app\n'), [])
