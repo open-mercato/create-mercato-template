@@ -375,3 +375,8 @@ test('a publish refusal returned as an outcome is redacted too: no email address
     assert.match(result.stdout + result.stderr, /\[EMAIL\]/)
   }
 })
+
+test('the vendored entry schema is the catalog file, not a draft', () => {
+  assert.equal(templateSchema.$id, 'https://modules.openmercato.com/schema/template-1.json')
+  assert.equal(templateSchema.$comment, undefined)
+})

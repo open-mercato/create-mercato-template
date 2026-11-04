@@ -1,9 +1,9 @@
 // Spec Step 5: the module inventory of src/modules.ts and the generated
 // mercato-template.json. The prepare() tests build fixture repositories in a
 // temp directory from test/helpers/fixture-app.cjs; no network. The scaffold
-// files are vendored under test/fixtures/scaffold/ (see SOURCE.md there) and
-// the manifest schema under test/fixtures/catalog/ (a draft until the catalog
-// publishes it).
+// files are vendored under test/fixtures/scaffold/ (see SOURCE.md there), and
+// the catalog's manifest schema and modulesFromModulesTs fixtures under
+// test/fixtures/catalog/.
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const crypto = require('node:crypto')
@@ -84,7 +84,11 @@ test('the vendored scaffold files are the bytes SOURCE.md records', () => {
     const content = fs.readFileSync(path.join(fixtures, 'scaffold', directory, file))
     assert.equal(crypto.createHash('sha256').update(content).digest('hex'), sha256, `${directory}${file}`)
   }
-  assert.match(schema.$comment, /^DRAFT\./)
+})
+
+test('the vendored manifest schema is the catalog file, not a draft', () => {
+  assert.equal(schema.$id, 'https://modules.openmercato.com/schema/mercato-template-1.json')
+  assert.equal(schema.$comment, undefined)
 })
 
 /** A fixture app on the scaffold's src/modules.ts: every unconditional npm package resolves, enterprise too, storage-s3 does not (as in the stock app). */
@@ -571,7 +575,7 @@ test('buildManifest: openMercato is left out when the core version is unknown', 
   assertValidManifest(manifest)
 })
 
-test('the JSON Schema helper rejects what the draft schema forbids', () => {
+test('the JSON Schema helper rejects what the manifest schema forbids', () => {
   const valid = { schema: 1, name: 'x', modules: [{ id: 'a', from: '@app', when: 'OM_A && !module:b' }], createdWith: { tool: 'create-mercato-template', version: '0.1.0' } }
   assert.deepEqual(validate(schema, valid), [])
   assert.notDeepEqual(validate(schema, { ...valid, name: 'Not A Slug' }), [])
