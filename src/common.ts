@@ -77,6 +77,18 @@ export function safeCommandOutput(output: string, environment?: NodeJS.ProcessEn
   return sanitized.length > 3000 ? `…\n${sanitized.slice(-3000)}` : sanitized
 }
 
+/** Tokens recognized by their prefix, as `safeCommandOutput` removes them. */
+const prefixedToken = /\b(?:npm_[A-Za-z0-9_]{15,}|github_pat_[A-Za-z0-9_]{15,}|gh[pousr]_[A-Za-z0-9_]{15,})/g
+
+/**
+ * Email addresses and prefixed tokens replaced, nothing else: for a message
+ * the tool wrote itself around a path or a flag the user typed, whose fixed
+ * text must stay as written.
+ */
+export function redactValues(message: string): string {
+  return message.replace(prefixedToken, '[REDACTED]').replace(new RegExp(emailPattern.source, 'g'), '[EMAIL]')
+}
+
 /** An email address, as `redactMessage` removes it. */
 export const emailPattern = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/
 

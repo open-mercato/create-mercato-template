@@ -364,3 +364,14 @@ test('a refusal of <from> says what describe did not do, not what publish did no
   assert.match(result.stderr, /no entry was printed/)
   assert.doesNotMatch(result.stderr, /publish it|Nothing remote/)
 })
+
+test('a publish refusal returned as an outcome is redacted too: no email address from the --from path', () => {
+  const from = path.join(tempDir('cmt-'), `x-${email}`)
+  fs.mkdirSync(from)
+  for (const json of [false, true]) {
+    const result = cli(['publish', '--from', from, '--repo', 'acme/app', '--public', '--expect', 'a'.repeat(64), ...(json ? ['--json'] : [])])
+    assert.equal(result.status, 1)
+    assert.ok(!(result.stdout + result.stderr).includes(email), 'an email address reached the output')
+    assert.match(result.stdout + result.stderr, /\[EMAIL\]/)
+  }
+})

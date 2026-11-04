@@ -1,4 +1,4 @@
-import { redactMessage } from './common.js'
+import { redactMessage, redactValues } from './common.js'
 import { describe } from './describe.js'
 import { CliError, type ExitCode, type Failure, exitCodes } from './errors.js'
 import type { Finding } from './policy/entries.js'
@@ -511,7 +511,13 @@ export async function main(
     if (parsed.error) throw new CliError(`${parsed.error} Run with --help for usage.`, exitCodes.usage)
     const command = parsed.command as Command
     const value = await dispatch(command, parsed)
-    const result = isOutcome(value) ? value : outcome({ exitCode: exitCodes.ok, failures: [], fields: value ?? {}, text: '' })
+    const returned = isOutcome(value) ? value : outcome({ exitCode: exitCodes.ok, failures: [], fields: value ?? {}, text: '' })
+    // A returned failure may name a path the user typed, which may hold an email address or a token.
+    const result = outcome({
+      ...returned,
+      failures: returned.failures.map((failure) => (typeof failure.message === 'string' ? { ...failure, message: redactValues(failure.message) } : failure)),
+      ...(returned.error === undefined ? {} : { error: redactValues(returned.error) }),
+    })
     if (parsed.json) io.stdout(`${JSON.stringify(envelope(command, result.exitCode, result.failures, result.fields), null, 2)}\n`)
     else {
       if (result.text !== '') io.stdout(result.text)
