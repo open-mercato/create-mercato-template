@@ -183,6 +183,8 @@ test('findCredentialUrls finds passwords with a raw /, ?, # or @ (issue #10)', (
     'AT=postgres://u:p@ss@host/db?to=a@b.com',
     'EMPTY_USER=redis://:123#abc@host',
     'REF=postgres://${U}:${P:-a/b}@h/db',
+    'BAD_REF=postgres://u:${P@h/db}',
+    'IN_REF=${DATABASE_URL:=postgres://u:p#q@h}/x@y',
   ].join('\n')
   assert.deepEqual(
     findCredentialUrls(text).map(({ url, password, line }) => ({ url, password, line })),
@@ -196,6 +198,10 @@ test('findCredentialUrls finds passwords with a raw /, ?, # or @ (issue #10)', (
       { url: 'redis://:123#abc@host', password: '123#abc', line: 5 },
       // A / inside a ${...} reference does not end the authority.
       { url: 'postgres://${U}:${P:-a/b}@h/db', password: '${P:-a/b}', line: 6 },
+      // A ${ that is not a reference is plain text.
+      { url: 'postgres://u:${P@h/db}', password: '${P', line: 7 },
+      // The userinfo of a URL inside a reference ends with the reference; the URL string runs to the end of the token.
+      { url: 'postgres://u:p#q@h}/x@y', password: 'p#q', line: 8 },
     ],
   )
 })
@@ -222,6 +228,11 @@ test('findCredentialUrls does not report URLs with an @ in the path or query and
     'http://[::1]:8080/@x',
     'http://${HOST}:${PORT}/?to=a@b.com',
     'http://${HOST}:${PORT:-3000}/@scope/pkg',
+    'http://localhost:$PORT/@vite/client',
+    'http://$HOST:$PORT/@scope/pkg',
+    'f"http://localhost:{port}/@vite/client"',
+    'postgres://host:port/db?user=me@x',
+    'https://h:abc/@scope/pkg',
     'https://user@example.com/a:b@c',
     'ssh://git@github.com:22/org/repo.git',
     'git@github.com:org/repo.git',
@@ -243,6 +254,10 @@ test('findCredentialUrls scans a long line in linear time', () => {
     'a://'.repeat(50_000),
     'a://${'.repeat(40_000),
     'a://${}'.repeat(30_000),
+    'a://${A:-'.repeat(30_000) + '}'.repeat(30_000) + 'x'.repeat(30_000),
+    'a://${A}'.repeat(30_000) + '://u:'.repeat(10_000),
+    `h://h:${'{'.repeat(100_000)}/@x`,
+    `h://h:${'$a1'.repeat(60_000)}x/@x`,
     'h://u:p/'.repeat(30_000),
     'h://h:1/@'.repeat(25_000),
     `h://u:${'/'.repeat(200_000)}`,

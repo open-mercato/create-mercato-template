@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- `credential-url` finds a password with a raw `/`, `?`, `#` or `@` (`redis://:abc#123@host`, `postgres://u:a/b@h/db`), which it missed before (#10). The userinfo ends at the last `@` before the path, as a browser reads the URL; without one, a password with a raw `/`, `?` or `#` runs to the next `@`, unless the text after the `:` is a port. A URL with an `@` only in its path or query (`https://registry.npmjs.org/@scope/pkg`, `?to=a@b.com`) is still no finding, and the stock table is unchanged.
+- `credential-url` finds a password with a raw `/`, `?`, `#` or `@` (`redis://:abc#123@host`, `postgres://u:a/b@h/db`), which it missed before (#10). The userinfo ends at the last `@` before the path, as a browser reads the URL; without one, a password with a raw `/`, `?` or `#` runs to the next `@`, unless the text after the `:` reads as a port (digits or a placeholder such as `$PORT`) or the `@` follows a `/`. A URL with an `@` only in its path or query (`https://registry.npmjs.org/@scope/pkg`, `?to=a@b.com`) is still no finding, and the stock table is unchanged.
 
 ## 0.1.0
 
