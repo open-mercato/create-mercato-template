@@ -40,7 +40,7 @@ const trailing = '.,;)]'
 //    with `[` (an IPv6 literal), and the userinfo does not end in `/` (an `@`
 //    right after a `/` starts a path segment: `/@scope`, `/@vite/client`). An
 //    empty user (`redis://:123#abc@host`) has no host to give a port to, so
-//    its password is reported whatever it holds. So `https://x.com/?to=a@b.com`
+//    the port test does not apply to it (the `/` rule still does). So `https://x.com/?to=a@b.com`
 //    (no `:`), `https://x.com:8080/@scope/pkg`,
 //    `http://${HOST}:${PORT}/?to=a@b.com`, `http://localhost:$PORT/@vite/client`
 //    (a port) and `https://example.com/?u=a:b@c` (the `:` is in the query) are
