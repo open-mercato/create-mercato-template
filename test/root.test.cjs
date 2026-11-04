@@ -70,7 +70,7 @@ test('the Step 3 fixture app passes the root checks and fills the report fields'
   assert.equal(report.packageManager, 'yarn@4.12.0')
   assert.deepEqual(report.engines, { node: '>=24' })
   const notice = report.notices.find((item) => item.code === 'checks-incomplete')
-  assert.match(notice.detail, /snapshot core, the root checks, the module inventory and the manifest only/)
+  assert.match(notice.detail, /the manifest, the secret scan and the opaque file check only\. The other warnings and notices, the declared env in the manifest and the regenerated \.env\.example come in later versions/)
 })
 
 test('a mixed-line lockfile: root-om-mixed-lines', () => {
@@ -215,13 +215,18 @@ test('a git or URL range is looked up by name, and the range never appears in a 
     'package.json': packageJson({ dependencies: { '@open-mercato/core': coreVersion, '@open-mercato/ui': range } }),
     'yarn.lock': fixtureFiles['yarn.lock'] + lockEntry('@open-mercato/ui', coreVersion),
   })
-  assert.deepEqual(run(known).report.findings, [])
+  // From spec Step 7 the secret scan reads package.json too: the token in the
+  // URL is a secret and a credential URL, and the root checks add nothing.
+  const scanOnly = ['credential-url package.json', 'secret package.json']
+  const knownOutcome = run(known)
+  assertErrors(knownOutcome, scanOnly)
+  assert.equal(JSON.stringify(knownOutcome.result).includes(secret), false)
   const stale = createFixtureRepo({
     'package.json': packageJson({ dependencies: { '@open-mercato/core': coreVersion, '@open-mercato/ui': `0.9.1 || ${secret}` } }),
     'yarn.lock': fixtureFiles['yarn.lock'] + lockEntry('@open-mercato/ui', coreVersion),
   })
   const outcome = run(stale)
-  assertErrors(outcome, ['root-om-unresolved package.json'])
+  assertErrors(outcome, ['root-om-unresolved package.json', 'secret package.json'])
   assert.doesNotMatch(JSON.stringify(outcome.report), new RegExp(secret))
   assert.equal(fs.readFileSync(path.join(outcome.out, 'report.json'), 'utf8').includes(secret), false)
   assert.equal(isPlainRange('^0.9.0'), true)

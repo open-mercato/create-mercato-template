@@ -318,9 +318,15 @@ export function buildSnapshot(input: SnapshotInput): Snapshot {
   }
 }
 
-/** Sorts findings in place by the UTF-8 bytes of the path, then by rule. */
+/** Sorts findings in place by the UTF-8 bytes of the path, then by rule, line and rule id. */
 export function sortFindings(findings: Finding[]): Finding[] {
-  return findings.sort((left, right) => compareUtf8(left.path, right.path) || left.rule.localeCompare(right.rule))
+  return findings.sort(
+    (left, right) =>
+      compareUtf8(left.path, right.path) ||
+      left.rule.localeCompare(right.rule) ||
+      (left.line ?? 0) - (right.line ?? 0) ||
+      (left.ruleId ?? '').localeCompare(right.ruleId ?? ''),
+  )
 }
 
 function stripTrailingSlash(item: Buffer): Buffer {
