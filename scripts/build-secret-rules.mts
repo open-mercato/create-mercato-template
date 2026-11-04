@@ -7,7 +7,8 @@
 //   npm run secret-rules -- --check   only compare; exit 1 when the committed file differs
 //   npm run secret-rules -- --input <file>   read a local copy instead of fetching
 //
-// It runs with Node's type stripping and imports nothing from src/ but types.
+// It runs with Node's type stripping and imports nothing from src/ but types
+// and src/rules/pattern.ts, which checks that the scan can bound each rule.
 // TOML is read by the small strict reader below, for the subset gitleaks.toml
 // uses, so no TOML parser is a dependency. Rules left out are listed, each
 // with a reason, in the committed scripts/secret-rules-skipped.json; any other
@@ -16,6 +17,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { BundledAllowlist, BundledRule, BundledRules, ConvertedRegex, RulesSource, SkippedRule } from '../src/rules/gitleaks.ts'
+import { PatternError, analyzePattern } from '../src/rules/pattern.ts'
 
 export const gitleaksSource: RulesSource = {
   name: 'gitleaks',
@@ -677,6 +679,20 @@ export function buildSecretRules(toml: string, skipped: SkippedRule[], source: R
   const converted = new Set(rules.map((rule) => rule.id))
   const missing = requiredRuleIds.filter((id) => !converted.has(id))
   if (missing.length > 0) throw new Error(`Required rule(s) missing from the converted rules: ${missing.join(', ')}.`)
+  // The scan bounds its cost from each pattern (src/rules/pattern.ts); a
+  // pattern it cannot read would be a rule it cannot run.
+  const unread: string[] = []
+  for (const rule of rules) {
+    if (rule.regex === null) continue
+    try {
+      analyzePattern(rule.regex)
+    } catch (error) {
+      if (!(error instanceof PatternError)) throw error
+      unread.push(`${rule.id}: ${error.message}`)
+    }
+  }
+  if (unread.length > 0)
+    throw new Error(`${unread.length} converted rule(s) cannot be read by src/rules/pattern.ts. Teach the reader the construct:\n  ${unread.join('\n  ')}`)
   return {
     schema: 1,
     source,

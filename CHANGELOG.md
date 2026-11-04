@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- The secret scan no longer slows down on large single-line text (#9). A 1 MB hex string with every vendor keyword took 134 s; it now takes 0.26 s, and every 1 MB input measured, the worst cases constructed for the scan included, takes under 1.5 s. The scan finds the same matches as before: each rule is tried only near the literal parts every match holds, and a rule whose cost cannot be proven linear runs capped with a counted work limit, never a clock. The bound and the benchmark (`npm run bench:secret-scan`) are in the guide, under Scan cost.
+- New error `scan-limit`: a secret rule that cannot run within its fixed limits on a file (a run of more than 4,096 repeated characters where it could match, or more work than its limit) stops `prepare` with exit 1, `ruleId` and the line. The file is refused, never exported unscanned. Five rules can raise it: `curl-auth-header`, `curl-auth-user`, `kubernetes-secret-yaml`, `nuget-config-password` and `private-key`.
+
 ## 0.1.0
 
 First release. It needs Node.js 24 or newer and Git 2.40 or newer; `publish` also needs the GitHub CLI `gh`, signed in. The app must be a Git repository with at least one commit.
