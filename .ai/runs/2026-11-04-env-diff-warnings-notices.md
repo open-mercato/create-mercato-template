@@ -30,15 +30,17 @@ Ship Step 8 of the spec's Implementation Plan: the env diff and the regenerated 
 
 ## Progress
 
+PR: #11
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` : <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Code
 
-- [ ] 1.1 Env diff, generated .env.example and declared env
-- [ ] 1.2 Warnings and notices
-- [ ] 1.3 prepare on the CLI
-- [ ] 1.4 Tests for every Step 8 case
+- [x] 1.1 Env diff, generated .env.example and declared env : 4c3eb3e
+- [x] 1.2 Warnings and notices : 4c3eb3e
+- [x] 1.3 prepare on the CLI : 4c3eb3e
+- [x] 1.4 Tests for every Step 8 case : 4c3eb3e, 0b2e020
 
 ### Phase 2: Docs
 
-- [ ] 2.1 docs/guide.md, CHANGELOG.md and AGENTS.md
+- [x] 2.1 docs/guide.md, CHANGELOG.md and AGENTS.md : 3697185
