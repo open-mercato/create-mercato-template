@@ -283,11 +283,12 @@ test('a ZIP named logo.png: opaque-file; a real PNG is exported', () => {
   assert.equal(result.exitCode, 1)
   assert.deepEqual(
     report.findings.map((finding) => [finding.rule, finding.path]),
-    [['opaque-file', 'public/logo.png']],
+    [['opaque-file', 'public/logo.png'], ['image', 'public/real.png']],
   )
   assert.equal(fs.existsSync(path.join(out, 'tree')), false)
   const clean = run(createFixtureRepo({ 'public/real.png': pngBytes }))
   assert.equal(clean.result.exitCode, 0)
+  assert.deepEqual(clean.report.images, [{ path: 'public/real.png', size: pngBytes.length }])
   assert.equal(treeHas(clean.out, 'public/real.png'), true)
 })
 

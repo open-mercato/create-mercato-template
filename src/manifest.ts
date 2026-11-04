@@ -2,11 +2,13 @@
  * `mercato-template.json` (spec, "`mercato-template.json` mapping"). The
  * catalog owns the schema (`mercato-template-1.json`); the tests validate
  * the output against a vendored copy. The manifest is generated: a
- * `mercato-template.json` in the source app is replaced. `env` is added in
- * spec Step 8.
+ * `mercato-template.json` in the source app is replaced; its `env`
+ * descriptions and links serve keys whose comment is missing (see
+ * `src/policy/env.ts`).
  */
 import { type Inventory, appFrom, defaultFrom, isKnownFrom } from './inventory.js'
 import { type Lockfile } from './lockfile.js'
+import type { DeclaredEnv } from './policy/env.js'
 import type { Finding } from './policy/entries.js'
 import { type OpenMercato, enterprisePackage, resolveModulePackage } from './policy/root.js'
 import { type FileRecord, sha256Hex } from './snapshot.js'
@@ -35,6 +37,8 @@ export type Manifest = {
   description?: string
   /** `<major>.<minor>.x` of the pinned core. */
   openMercato?: string
+  /** Declared env: the keys of `.env.example` that the stock file lacks. Left out when there are none. */
+  env?: DeclaredEnv[]
   modules: ManifestModule[]
   createdWith: { tool: string; version: string }
 }
@@ -111,6 +115,8 @@ export type ManifestInput = {
   appName: string
   openMercato: OpenMercato | null
   modules: readonly ReportModule[]
+  /** Declared env, from the env diff. */
+  env?: readonly DeclaredEnv[]
   version: string
 }
 
@@ -148,6 +154,7 @@ export function buildManifest(input: ManifestInput): { manifest: Manifest; findi
     name,
     ...(usable ? { description } : {}),
     ...(input.openMercato === null ? {} : { openMercato: `${input.openMercato.line}.x` }),
+    ...(input.env && input.env.length > 0 ? { env: input.env.map((item) => ({ ...item })) } : {}),
     modules: input.modules.map(({ id, from, package: pinned, when }) => ({
       id,
       from,

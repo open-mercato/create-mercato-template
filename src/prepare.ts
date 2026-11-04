@@ -1,15 +1,16 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
-import { toolVersion } from './cli.js'
 import { type Executor, run } from './common.js'
 import { CliError, exitCodes } from './errors.js'
 import { GitReader, checkGit, isDubiousOwnership, unsafeDirectoryError } from './git.js'
 import { readInventory } from './inventory.js'
-import { type ReportModule, buildManifest, manifestPath, manifestRecord, resolveModules, serializeManifest } from './manifest.js'
+import { type ReportModule, buildManifest, manifestPath, resolveModules, serializeManifest } from './manifest.js'
+import { type EnvReport, buildEnv, envExamplePath, envKeyPattern, sourceManifestEnv } from './policy/env.js'
 import type { Finding } from './policy/entries.js'
 import { classifyContent, decodeForScan, isText } from './policy/opaque.js'
 import { type OpenMercato, type RootResult, checkRoot } from './policy/root.js'
 import { scanPath, scanText } from './policy/secrets.js'
+import { type ImageRecord, type Notice, checkWarnings, notices as reportNotices } from './policy/warnings.js'
 import {
   type Excluded,
   type FileRecord,
@@ -18,23 +19,25 @@ import {
   buildSnapshot,
   compareUtf8,
   computeSnapshotId,
+  sha256Hex,
   sortFindings,
   writeOut,
 } from './snapshot.js'
 import { type RulesSummary, rulesSummary } from './rules/gitleaks.js'
 import { matchStock } from './stock.js'
+import { toolVersion } from './version.js'
 
 export type { Finding } from './policy/entries.js'
 export type { Excluded, FileRecord, Uncommitted } from './snapshot.js'
 export type { OpenMercato } from './policy/root.js'
 export type { Manifest, ReportModule } from './manifest.js'
 export type { RulesSummary } from './rules/gitleaks.js'
+export type { EnvReport } from './policy/env.js'
+export type { ImageRecord, Notice } from './policy/warnings.js'
 
 /**
- * The internal entry point of `prepare` (spec Step 3). The CLI command keeps
- * answering exit 2 "not implemented yet" until Step 8, so no command on
- * `main` writes an `<out>/tree` without the full scan; tests call this
- * function directly.
+ * The options of `prepare` (spec, Commands and flags). The CLI command
+ * (`src/cli.ts`) maps its flags to them; tests call `prepare()` directly too.
  */
 export type PrepareOptions = {
   /** The app directory; defaults to the current directory. Must be the Git top level. */
@@ -43,8 +46,10 @@ export type PrepareOptions = {
   out: string
   /** A10: export the worktree version of changed and untracked files. */
   includeUncommitted?: boolean
-  /** Exact repo-relative paths of opaque files to export (the `--allow-file` flag of spec Step 8). */
+  /** Exact repo-relative paths of opaque files to export (`--allow-file`). */
   allowFiles?: readonly string[]
+  /** Keys whose non-stock value the generated `.env.example` keeps after the checks (`--keep-env`). */
+  keepEnv?: readonly string[]
   /** Environment for Git; defaults to `process.env`. */
   environment?: NodeJS.ProcessEnv
   /** Executor for the Git version check; defaults to `run`. */
@@ -53,11 +58,9 @@ export type PrepareOptions = {
   now?: () => Date
 }
 
-export type Notice = { code: string; detail?: string }
-
 export type AllowFile = { path: string; used: boolean }
 
-/** `report.json`, schema 1. Later spec steps add the other catalog fields. */
+/** `report.json`, schema 1. */
 export type Report = {
   schema: 1
   /** `rules`: the bundled gitleaks rules: their source tag and sha256, the rule count and the ids left out with their reasons. */
@@ -80,6 +83,10 @@ export type Report = {
   excluded: Excluded[]
   /** The `allowFiles` paths, each with `used`: true when it names an opaque file of the snapshot. */
   allowFiles: AllowFile[]
+  /** The env diff: kept, emptied and declared keys, and the line numbers of dropped lines. Never a value. */
+  env: EnvReport
+  /** Every image of the snapshot, anywhere, with its size. */
+  images: ImageRecord[]
   /** The module inventory of `src/modules.ts`: the manifest entries with their line, and what could not be read. */
   modules: { entries: ReportModule[]; unparsed: Array<{ line: number; reason: string }> }
   /** Q6. `dependency`: `yarn.lock` resolves `@open-mercato/enterprise`; `modules`: the registered modules from it, with their `when`. */
@@ -87,7 +94,7 @@ export type Report = {
   totals: { files: number; bytes: number }
 }
 
-/** What the `--json` envelope of `prepare` will carry (spec, "--json shape"). */
+/** What the `--json` envelope of `prepare` carries (spec, "--json shape"). */
 export type PrepareResult = {
   /** 0, or 1 when the report has an `error` finding. */
   exitCode: 0 | 1
@@ -103,13 +110,6 @@ const codeOnly: Notice = {
   code: 'code-only',
   detail:
     'The snapshot holds files only: configuration held in the database (anything set through the UI), uploaded files and runtime edits not written to tracked files are not part of it.',
-}
-
-/** Until spec Step 8: the snapshot core runs, the content checks of later steps do not yet. */
-const checksIncomplete: Notice = {
-  code: 'checks-incomplete',
-  detail:
-    'This version runs the snapshot core, the root checks, the module inventory, the manifest, the secret scan and the opaque file check only. The other warnings and notices, the declared env in the manifest and the regenerated .env.example come in later versions; the root .env.example is excluded until then.',
 }
 
 const uncommittedNotExported: Notice = {
@@ -234,6 +234,7 @@ export function prepare(options: PrepareOptions): PrepareResult {
   const environment = options.environment ?? process.env
   const includeUncommitted = options.includeUncommitted === true
   const allowFiles = allowFilesOption(options.allowFiles)
+  const keepEnv = keepEnvOption(options.keepEnv)
   const now = options.now ?? (() => new Date())
 
   checkGit(options.executor ?? run, appReal, { env: environment })
@@ -260,29 +261,45 @@ export function prepare(options: PrepareOptions): PrepareResult {
   let modules: Report['modules'] = { entries: [], unparsed: [] }
   let enterpriseModules: Report['enterprise']['modules'] = []
   let allowFilesReport: AllowFile[] = allowFiles.map((item) => ({ path: item, used: false }))
+  let envReport: EnvReport = { kept: [], emptied: [], declared: [], dropped: [] }
+  let images: ImageRecord[] = []
+  const stock = matchStock(root?.openMercato?.version ?? null)
+  const notices: Notice[] = [codeOnly]
   if (root) {
     snapshot.findings.push(...root.findings)
     const inventory = readInventory(snapshot.contents)
     const resolved = resolveModules(inventory, root.packageJson, root.lockfile)
     modules = resolved.report
     enterpriseModules = resolved.enterprise
+    const env = buildEnv({
+      source: snapshot.contents.get(envExamplePath),
+      match: stock,
+      keepEnv,
+      sourceManifestEnv: sourceManifestEnv(snapshot.contents.get(manifestPath)),
+    })
+    envReport = env.report
     const { manifest, findings } = buildManifest({
       packageJson: root.packageJson,
       appName: path.basename(appReal),
       openMercato: root.openMercato,
       modules: resolved.report.entries,
+      env: env.declared,
       version: toolVersion(),
     })
-    snapshot.findings.push(...inventory.findings, ...resolved.findings, ...findings)
-    addManifest(snapshot, serializeManifest(manifest))
+    snapshot.findings.push(...inventory.findings, ...resolved.findings, ...env.findings, ...findings)
+    addGenerated(snapshot, envExamplePath, env.content)
+    addGenerated(snapshot, manifestPath, serializeManifest(manifest))
     const content = checkContents(snapshot, allowFiles)
     snapshot.findings.push(...content.findings)
     allowFilesReport = content.allowFiles
+    const warnings = checkWarnings({ files: snapshot.files, contents: snapshot.contents, excluded: snapshot.excluded })
+    snapshot.findings.push(...warnings.findings)
+    images = warnings.images
     sortFindings(snapshot.findings)
+    notices.push(...reportNotices({ stock, enterprise: { dependency: root.enterprise.dependency, modules: enterpriseModules }, packageJson: root.packageJson }))
   }
   const errors = snapshot.findings.filter((item) => item.level === 'error')
   const snapshotId = errors.length === 0 ? computeSnapshotId(snapshot.files) : null
-  const notices: Notice[] = [codeOnly, checksIncomplete]
   if (snapshot.uncommitted.length > 0 && !includeUncommitted) notices.push(uncommittedNotExported)
 
   const report: Report = {
@@ -290,7 +307,7 @@ export function prepare(options: PrepareOptions): PrepareResult {
     tool: { name: 'create-mercato-template', version: toolVersion(), rules: rulesSummary() },
     createdAt: now().toISOString(),
     source: { head: base.head, dirty: snapshot.uncommitted.length > 0, includeUncommitted },
-    stock: stockOf(root?.openMercato ?? null),
+    stock: { version: stock.version, known: stock.known },
     engines: root?.engines ?? null,
     packageManager: root?.packageManager ?? null,
     files: snapshot.files,
@@ -301,6 +318,8 @@ export function prepare(options: PrepareOptions): PrepareResult {
     uncommitted: snapshot.uncommitted,
     excluded: snapshot.excluded,
     allowFiles: allowFilesReport,
+    env: envReport,
+    images,
     modules,
     enterprise: { dependency: root?.enterprise.dependency ?? false, modules: enterpriseModules },
     totals: { files: snapshot.files.length, bytes: snapshot.files.reduce((sum, file) => sum + file.size, 0) },
@@ -313,6 +332,16 @@ function allowFilesOption(value: unknown): string[] {
   if (value === undefined) return []
   if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item === ''))
     throw usage('allowFiles must be a list of repo-relative paths. Nothing was read or written.')
+  return [...new Set(value as string[])]
+}
+
+function keepEnvOption(value: unknown): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string'))
+    throw usage('keepEnv must be a list of env key names. Nothing was read or written.')
+  for (const item of value as string[])
+    if (!envKeyPattern.test(item))
+      throw usage('--keep-env takes an env key name (letters, digits and _, not starting with a digit), such as APP_URL. Nothing was read or written.')
   return [...new Set(value as string[])]
 }
 
@@ -359,24 +388,23 @@ function checkContents(snapshot: Snapshot, allowFiles: readonly string[]): { fin
 }
 
 /**
- * Puts the generated manifest into the file set, in place of a
- * `mercato-template.json` from the source app. A source path that differs
- * from it only in case would overwrite it on macOS and Windows:
+ * Puts a generated file (`.env.example`, `mercato-template.json`) into the
+ * file set, in place of the file of that path from the source app; with
+ * `content` null, the source file only leaves the set. A source path that
+ * differs from it only in case would overwrite it on macOS and Windows:
  * `path-case-collision`.
  */
-function addManifest(snapshot: Snapshot, content: Buffer): void {
-  snapshot.files = snapshot.files.filter((file) => file.path !== manifestPath)
+function addGenerated(snapshot: Snapshot, generatedPath: string, content: Buffer | null): void {
+  snapshot.files = snapshot.files.filter((file) => file.path !== generatedPath)
+  snapshot.contents.delete(generatedPath)
+  if (content === null) return
+  const lower = generatedPath.toLowerCase()
   for (const file of snapshot.files)
-    if (file.path.toLowerCase() === manifestPath)
-      snapshot.findings.push({ rule: 'path-case-collision', level: 'error', path: file.path, message: `Differs from the generated ${manifestPath} only in case.` })
-  snapshot.files.push(manifestRecord(content))
+    if (file.path.toLowerCase() === lower)
+      snapshot.findings.push({ rule: 'path-case-collision', level: 'error', path: file.path, message: `Differs from the generated ${generatedPath} only in case.` })
+  snapshot.files.push({ path: generatedPath, mode: '100644', size: content.length, sha256: sha256Hex(content), origin: 'generated', generated: true })
   snapshot.files.sort((left, right) => compareUtf8(left.path, right.path))
-  snapshot.contents.set(manifestPath, content)
-}
-
-function stockOf(openMercato: OpenMercato | null): Report['stock'] {
-  const match = matchStock(openMercato?.version ?? null)
-  return { version: match.version, known: match.known }
+  snapshot.contents.set(generatedPath, content)
 }
 
 function repoFinding(rule: keyof typeof repoHints): Finding {
