@@ -84,7 +84,8 @@ export function classifyContent(filePath: string, content: Buffer, text: boolean
  * The text the secret scan reads from a file that is not UTF-8 text, so an
  * opaque file exported through `allowFiles` is still scanned when it holds
  * text in another encoding: UTF-16 when it starts with a byte order mark,
- * else Latin-1 when it has no NUL byte (a legacy 8-bit text file). Binary
+ * else Latin-1 when it has no NUL byte (a legacy 8-bit text file), else
+ * UTF-16 when its NUL bytes sit where mostly ASCII UTF-16 has them. Binary
  * content gives null: only `allowFiles` exports it, and it is not scanned.
  */
 export function decodeForScan(content: Buffer): string | null {
@@ -94,5 +95,28 @@ export function decodeForScan(content: Buffer): string | null {
     return swapped.swap16().toString('utf16le')
   }
   if (!content.includes(0)) return content.toString('latin1')
+  const order = utf16WithoutMark(content)
+  if (order === 'le') return content.toString('utf16le')
+  if (order === 'be') return Buffer.from(content).swap16().toString('utf16le')
+  return null
+}
+
+/**
+ * UTF-16 text without a byte order mark, as Windows tools write it: an even
+ * length, and NUL bytes on nearly every odd offset (little-endian) or every
+ * even offset (big-endian) and almost nowhere else, which is what mostly
+ * ASCII text looks like in UTF-16.
+ */
+function utf16WithoutMark(content: Buffer): 'le' | 'be' | null {
+  if (content.length < 4 || content.length % 2 !== 0) return null
+  let evenZeros = 0
+  let oddZeros = 0
+  for (let index = 0; index < content.length; index += 2) {
+    if (content[index] === 0) evenZeros += 1
+    if (content[index + 1] === 0) oddZeros += 1
+  }
+  const pairs = content.length / 2
+  if (oddZeros >= pairs * 0.9 && evenZeros <= pairs * 0.1) return 'le'
+  if (evenZeros >= pairs * 0.9 && oddZeros <= pairs * 0.1) return 'be'
   return null
 }

@@ -134,12 +134,12 @@ class Lines {
     }
     return low
   }
-  /** The text of the lines from the one that holds `start` to the one that holds `end`, without the final newline. */
-  span(start: number, end: number): string {
+  /** The lines from the one that holds `start` to the one that holds `end`: a cache key and their text, without the final newline. */
+  span(start: number, end: number): { key: string; text: () => string } {
     const first = this.indexOf(start)
     const last = this.indexOf(end)
     const starts = this.starts as number[]
-    return this.text.slice(starts[first], last + 1 < starts.length ? starts[last + 1] - 1 : this.text.length)
+    return { key: `${first}:${last}`, text: () => this.text.slice(starts[first], last + 1 < starts.length ? starts[last + 1] - 1 : this.text.length) }
   }
 }
 
@@ -148,10 +148,29 @@ function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0
 }
 
-function allowed(rule: CompiledRule, filePath: string, secret: string, match: string, line: string): boolean {
-  return rule.allowlists.some((allowlist) => {
-    const target = allowlist.regexTarget === 'match' ? match : allowlist.regexTarget === 'line' ? line : secret
-    const regexAllowed = target !== '' && allowlist.regexes.some((regex) => regex.test(target))
+/**
+ * The line of a match, read lazily, and the result of each `regexTarget:
+ * "line"` allowlist on it, cached by line span: the result depends on the
+ * line text only, so many matches on one long line test it once.
+ */
+type LineTarget = { key: string; text: () => string; cache: Map<string, boolean> }
+
+function allowed(rule: CompiledRule, filePath: string, secret: string, match: string, line: LineTarget): boolean {
+  return rule.allowlists.some((allowlist, index) => {
+    let regexAllowed: boolean
+    if (allowlist.regexTarget === 'line') {
+      const key = `${index}:${line.key}`
+      let cached = line.cache.get(key)
+      if (cached === undefined) {
+        const text = line.text()
+        cached = text !== '' && allowlist.regexes.some((regex) => regex.test(text))
+        line.cache.set(key, cached)
+      }
+      regexAllowed = cached
+    } else {
+      const target = allowlist.regexTarget === 'match' ? match : secret
+      regexAllowed = target !== '' && allowlist.regexes.some((regex) => regex.test(target))
+    }
     const lower = secret.toLowerCase()
     const stopword = secret !== '' && allowlist.stopwords.some((word) => lower.includes(word))
     if (!allowlist.and) return regexAllowed || stopword
@@ -183,6 +202,7 @@ function ruleHits(rule: CompiledRule, filePath: string, text: string, lower: str
   if (rule.path !== null && !rule.path.test(filePath)) return []
   if (rule.keywords.length > 0 && !rule.keywords.some((keyword) => lower.includes(keyword))) return []
   const hits: Hit[] = []
+  const lineCache = new Map<string, boolean>()
   const regex = rule.regex
   regex.lastIndex = 0
   for (let found = regex.exec(text); found !== null; found = regex.exec(text)) {
@@ -193,7 +213,7 @@ function ruleHits(rule: CompiledRule, filePath: string, text: string, lower: str
     const { value: match, leading } = trimNewlines(found[0])
     if (match === '') continue
     const start = found.index + leading
-    const line = lines.span(start, start + match.length)
+    const line = { ...lines.span(start, start + match.length), cache: lineCache }
     const secret = secretOf(rule, match)
     if (rule.entropy !== null && rule.entropy !== 0 && shannonEntropy(secret) <= rule.entropy) continue
     if (allowed(rule, filePath, secret, match, line)) continue

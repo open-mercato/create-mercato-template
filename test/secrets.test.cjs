@@ -478,4 +478,16 @@ test('decodeForScan: UTF-16 with a byte order mark, Latin-1 without NUL bytes, n
   assert.equal(decodeForScan(Buffer.concat([Buffer.of(0xfe, 0xff), Buffer.from('hi', 'utf16le').swap16()])), 'hi')
   assert.equal(decodeForScan(Buffer.of(0x43, 0x61, 0x66, 0xe9)), 'Caf\u00e9')
   assert.equal(decodeForScan(zipBytes), null)
+  // UTF-16 without a byte order mark, as Windows tools write it.
+  assert.equal(decodeForScan(Buffer.from('$t = 1\r\n', 'utf16le')), '$t = 1\r\n')
+  assert.equal(decodeForScan(Buffer.from('$t = 1\r\n', 'utf16le').swap16()), '$t = 1\r\n')
+  assert.equal(decodeForScan(pngBytes), null)
+})
+
+test('many matches on one long line stay fast: the line allowlists run once per line', () => {
+  const line = Array.from({ length: 8000 }, (_, index) => `apiKey:"k${index}Zq81x${index}"`).join(',')
+  const started = process.hrtime.bigint()
+  scanText('dist/app.js', `${line}\n`)
+  const seconds = Number(process.hrtime.bigint() - started) / 1e9
+  assert.ok(seconds < 5, `took ${seconds.toFixed(1)} s`)
 })
