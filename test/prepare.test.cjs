@@ -431,9 +431,9 @@ test('snapshotId equals a golden value for the fixture app', () => {
   // Changes when the fixture app or the generated files change: Step 5 added
   // mercato-template.json (whose createdWith.version is the package version,
   // so a version bump changes it too), Step 8 added the regenerated
-  // .env.example and the fixture README.md.
+  // .env.example and the fixture README.md, and 0.1.0 replaced 0.0.0.
   const { result } = run(createFixtureRepo())
-  assert.equal(result.snapshotId, 'fdca3ea47bc77048b32aa47905dbe22eeb67068d89ef1d3a7a826ceae3d98553')
+  assert.equal(result.snapshotId, 'c592565d08da18ace1cba38b2ee83a70c7687ec8398c651c0cd788b1a3815afe')
   assert.equal(result.snapshotId, computeSnapshotId(result.report.files))
 })
 

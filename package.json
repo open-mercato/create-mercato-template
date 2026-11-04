@@ -1,6 +1,6 @@
 {
   "name": "create-mercato-template",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Save an Open Mercato app as a clean GitHub template repository.",
   "homepage": "https://github.com/open-mercato/create-mercato-template#readme",
   "repository": {
@@ -39,6 +39,7 @@
     "stock-table": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/build-stock-table.mts",
     "secret-rules": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/build-secret-rules.mts",
     "prepack": "npm run build",
+    "prepublishOnly": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/release-gate.mts",
     "prepare": "npm run build",
     "test:release:local": "node test/release-e2e/local.mts"
   },

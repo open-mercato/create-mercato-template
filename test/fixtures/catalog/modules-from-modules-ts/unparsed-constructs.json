@@ -1,0 +1,46 @@
+{
+  "entries": [
+    {
+      "id": "auth",
+      "from": "@open-mercato/core"
+    }
+  ],
+  "unparsed": [
+    {
+      "line": 7,
+      "reason": "an entry whose id is not a string literal"
+    },
+    {
+      "line": 8,
+      "reason": "an entry whose id is not a module id (lower-case snake_case)"
+    },
+    {
+      "line": 9,
+      "reason": "an entry whose from is neither @app, an npm package name nor a path"
+    },
+    {
+      "line": 10,
+      "reason": "an addition that is not an object literal"
+    },
+    {
+      "line": 16,
+      "reason": "the module list passed to a function, which may add modules"
+    },
+    {
+      "line": 17,
+      "reason": "a spread of an expression the inventory cannot read"
+    },
+    {
+      "line": 18,
+      "reason": "an addition that is not an object literal"
+    },
+    {
+      "line": 19,
+      "reason": "a splice() on the module list in a form the inventory cannot read"
+    },
+    {
+      "line": 20,
+      "reason": "a loop that changes entries of the module list"
+    }
+  ]
+}

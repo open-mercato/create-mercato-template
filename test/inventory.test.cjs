@@ -1,9 +1,9 @@
 // Spec Step 5: the module inventory of src/modules.ts and the generated
 // mercato-template.json. The prepare() tests build fixture repositories in a
 // temp directory from test/helpers/fixture-app.cjs; no network. The scaffold
-// files are vendored under test/fixtures/scaffold/ (see SOURCE.md there) and
-// the manifest schema under test/fixtures/catalog/ (a draft until the catalog
-// publishes it).
+// files are vendored under test/fixtures/scaffold/ (see SOURCE.md there), and
+// the catalog's manifest schema and modulesFromModulesTs fixtures under
+// test/fixtures/catalog/.
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const crypto = require('node:crypto')
@@ -84,7 +84,11 @@ test('the vendored scaffold files are the bytes SOURCE.md records', () => {
     const content = fs.readFileSync(path.join(fixtures, 'scaffold', directory, file))
     assert.equal(crypto.createHash('sha256').update(content).digest('hex'), sha256, `${directory}${file}`)
   }
-  assert.match(schema.$comment, /^DRAFT\./)
+})
+
+test('the vendored manifest schema is the catalog file, not a draft', () => {
+  assert.equal(schema.$id, 'https://modules.openmercato.com/schema/mercato-template-1.json')
+  assert.equal(schema.$comment, undefined)
 })
 
 /** A fixture app on the scaffold's src/modules.ts: every unconditional npm package resolves, enterprise too, storage-s3 does not (as in the stock app). */
@@ -469,22 +473,32 @@ test('resolveImport: relative imports only, inside the snapshot', () => {
   assert.equal(resolveImport(contents, '@acme/x'), null)
 })
 
-test('contract: the catalog modulesFromModulesTs fixtures, when they exist', (context) => {
-  // Catalog Phase 1a step 4 will publish fixtures (a src/modules.ts and the
-  // expected entries). Until they are vendored here, this test is skipped.
+test('contract: the catalog modulesFromModulesTs fixtures', () => {
+  // Catalog Phase 1a step 4 (see test/fixtures/catalog/SOURCE.md): <name>.ts
+  // is src/modules.ts, the files of the optional <name>/ are other files of
+  // src/, and <name>.json is the catalog parser's {entries, unparsed}.
   const directory = path.join(fixtures, 'catalog', 'modules-from-modules-ts')
-  if (!fs.existsSync(directory)) {
-    context.skip('the catalog has not published its modulesFromModulesTs fixtures yet')
-    return
-  }
-  for (const name of fs.readdirSync(directory).filter((item) => item.endsWith('.ts'))) {
+  const names = fs.readdirSync(directory).filter((item) => item.endsWith('.ts'))
+  assert.equal(names.length, 8)
+  for (const name of names) {
     const expected = JSON.parse(fs.readFileSync(path.join(directory, name.replace(/\.ts$/, '.json')), 'utf8'))
-    const inventory = inventoryOf({ 'src/modules.ts': fs.readFileSync(path.join(directory, name), 'utf8') })
-    assert.deepEqual(
-      inventory.entries.map(({ id, from, when }) => (when === undefined ? { id, from } : { id, from, when })),
-      expected.entries,
-      name,
-    )
+    const files = { 'src/modules.ts': fs.readFileSync(path.join(directory, name)) }
+    const extra = path.join(directory, name.replace(/\.ts$/, ''))
+    if (fs.existsSync(extra)) for (const file of fs.readdirSync(extra)) files[`src/${file}`] = fs.readFileSync(path.join(extra, file))
+    const inventory = inventoryOf(files)
+    const entries = inventory.entries.map(({ id, from, when }) => (when === undefined ? { id, from } : { id, from, when }))
+    assert.deepEqual({ entries, unparsed: inventory.unparsed }, expected, name)
+  }
+})
+
+test('the vendored catalog fixtures copied from the scaffold are the bytes their SOURCE.md records', () => {
+  const directory = path.join(fixtures, 'catalog', 'modules-from-modules-ts')
+  const source = fs.readFileSync(path.join(directory, 'SOURCE.md'), 'utf8')
+  const rows = [...source.matchAll(/^\| `([^`]+)` +\| [^|]+\| `([0-9a-f]{40})` \| [^|]+\| `([0-9a-f]{64})` \|$/gm)]
+  assert.equal(rows.length, 4)
+  for (const [, file, , sha256] of rows) {
+    const content = fs.readFileSync(path.join(directory, file))
+    assert.equal(crypto.createHash('sha256').update(content).digest('hex'), sha256, file)
   }
 })
 
@@ -571,7 +585,7 @@ test('buildManifest: openMercato is left out when the core version is unknown', 
   assertValidManifest(manifest)
 })
 
-test('the JSON Schema helper rejects what the draft schema forbids', () => {
+test('the JSON Schema helper rejects what the manifest schema forbids', () => {
   const valid = { schema: 1, name: 'x', modules: [{ id: 'a', from: '@app', when: 'OM_A && !module:b' }], createdWith: { tool: 'create-mercato-template', version: '0.1.0' } }
   assert.deepEqual(validate(schema, valid), [])
   assert.notDeepEqual(validate(schema, { ...valid, name: 'Not A Slug' }), [])

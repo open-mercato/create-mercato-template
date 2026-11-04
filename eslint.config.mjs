@@ -2,7 +2,7 @@ import js from '@eslint/js'
 import tseslint from 'typescript-eslint'
 
 export default tseslint.config(
-  { ignores: ['dist/', 'node_modules/', '.agents/', '.claude/', 'test/fixtures/scaffold/'] },
+  { ignores: ['dist/', 'node_modules/', '.agents/', '.claude/', 'test/fixtures/scaffold/', 'test/fixtures/catalog/modules-from-modules-ts/'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

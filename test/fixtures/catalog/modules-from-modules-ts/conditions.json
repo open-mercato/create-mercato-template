@@ -1,0 +1,71 @@
+{
+  "entries": [
+    {
+      "id": "auth",
+      "from": "@open-mercato/core"
+    },
+    {
+      "id": "example",
+      "from": "@app"
+    },
+    {
+      "id": "example_customers_sync",
+      "from": "@app",
+      "when": "module:example"
+    },
+    {
+      "id": "legacy_import",
+      "from": "@app",
+      "when": "!OM_DISABLE_LEGACY"
+    },
+    {
+      "id": "modern_import",
+      "from": "@app",
+      "when": "OM_DISABLE_LEGACY"
+    },
+    {
+      "id": "record_locks",
+      "from": "@open-mercato/enterprise",
+      "when": "OM_ENABLE_ENTERPRISE_MODULES"
+    },
+    {
+      "id": "sso",
+      "from": "@open-mercato/enterprise",
+      "when": "OM_ENABLE_ENTERPRISE_MODULES && OM_ENABLE_ENTERPRISE_MODULES_SSO"
+    },
+    {
+      "id": "reports",
+      "from": "@acme/reports",
+      "when": "OM_ENABLE_ENTERPRISE_MODULES && OM_ENABLE_REPORTS"
+    },
+    {
+      "id": "reports_lite",
+      "from": "@acme/reports",
+      "when": "custom"
+    },
+    {
+      "id": "either",
+      "from": "@app",
+      "when": "custom"
+    },
+    {
+      "id": "beta_sso",
+      "from": "@app",
+      "when": "custom"
+    }
+  ],
+  "unparsed": [
+    {
+      "line": 30,
+      "reason": "a condition outside the when grammar (entry kept with when: \"custom\")"
+    },
+    {
+      "line": 36,
+      "reason": "a condition outside the when grammar (entry kept with when: \"custom\")"
+    },
+    {
+      "line": 41,
+      "reason": "a condition outside the when grammar (entry kept with when: \"custom\")"
+    }
+  ]
+}
