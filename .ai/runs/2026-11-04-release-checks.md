@@ -29,14 +29,17 @@ Ship Step 11 of the spec's Implementation Plan: `test/release-e2e/local.mts` and
 
 ## Progress
 
+PR: #14
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` : <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Release checks
 
-- [ ] 1.1 test/release-e2e/local.mts with the loopback API and the fetch guard
-- [ ] 1.2 Unit tests for the offline parts
-- [ ] 1.3 release-checks job in the Tests workflow
+- [x] 1.1 test/release-e2e/local.mts with the loopback API and the fetch guard : 2527733
+- [x] 1.2 Unit tests for the offline parts : 2527733
+- [x] 1.3 release-checks job in the Tests workflow : 2527733
 
 ### Phase 2: Docs
 
-- [ ] 2.1 docs/guide.md, README.md and SOURCE.md in test/release-e2e, CHANGELOG.md and AGENTS.md
+- [x] 2.1 docs/guide.md, README.md and SOURCE.md in test/release-e2e, CHANGELOG.md and AGENTS.md : 2527733
+- [x] Fix: api_keys enabled in the source app, signing secrets for production start : 905cda5
