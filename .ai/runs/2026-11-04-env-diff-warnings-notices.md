@@ -44,3 +44,5 @@ PR: #11
 ### Phase 2: Docs
 
 - [x] 2.1 docs/guide.md, CHANGELOG.md and AGENTS.md : 3697185
+- [x] Post-review fix: multi-line .env.example values, no Git before usage errors : ddb05fd
+- [x] Re-review minors: backtick values, escaped single quotes, regression fragment : 6318472
