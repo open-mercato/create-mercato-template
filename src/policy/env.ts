@@ -301,6 +301,7 @@ export function describe(block: readonly string[]): { description?: string; link
     text = (text.slice(0, found.index) + text.slice(found.index + link.length))
       .replace(/\(\s*\)/g, '')
       .replace(/\s+/g, ' ')
+      .replace(/\s+([.,;!?])/g, '$1')
       .replace(/[\s(:-]+$/, '')
       .trim()
   }
