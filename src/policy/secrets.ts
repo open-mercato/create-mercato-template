@@ -29,7 +29,7 @@
 import * as path from 'node:path'
 import { extraRules } from '../rules/extra.js'
 import { type BundledRule, type ConvertedRegex, bundledRules } from '../rules/gitleaks.js'
-import { isStockCredentialUrl } from '../stock.js'
+import { type StockTable, isStockCredentialUrl, stockTable } from '../stock.js'
 import { findCredentialUrls } from './credential-url.js'
 import type { Finding } from './entries.js'
 
@@ -113,7 +113,10 @@ export function shannonEntropy(data: string): number {
 /** 1-based line numbers by character offset. */
 class Lines {
   private starts: number[] | null = null
-  constructor(private readonly text: string) {}
+  private readonly text: string
+  constructor(text: string) {
+    this.text = text
+  }
   lineOf(offset: number): number {
     if (this.starts === null) {
       this.starts = [0]
@@ -245,10 +248,10 @@ const variableOnly = /^\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})$/
  * only `$NAME` or `${NAME}` (Q8); `${NAME:-default}` holds a literal and is a
  * finding.
  */
-export function scanCredentialUrls(filePath: string, text: string): Finding[] {
+export function scanCredentialUrls(filePath: string, text: string, table: StockTable = stockTable): Finding[] {
   const lines = new Set<number>()
   for (const found of findCredentialUrls(text)) {
-    if (variableOnly.test(found.password) || isStockCredentialUrl(found.url)) continue
+    if (variableOnly.test(found.password) || isStockCredentialUrl(found.url, table)) continue
     lines.add(found.line)
   }
   return [...lines]
