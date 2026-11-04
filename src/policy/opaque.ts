@@ -1,0 +1,122 @@
+/**
+ * Opaque files (spec, Opaque files). A file is text when it decodes as UTF-8
+ * with a fatal decoder and has no NUL byte. A file that is not text is
+ * allowed only when its extension is an image or a font and its first bytes
+ * match that format's signature. Archive and database extensions are opaque
+ * even when the content is text. Every other file that is not text is
+ * opaque: an `error` unless its exact path is in `allowFiles`.
+ */
+
+export type ContentKind = 'text' | 'media' | 'opaque'
+
+const utf8 = new TextDecoder('utf-8', { fatal: true })
+
+export const archiveExtensions: readonly string[] = ['zip', 'tar', 'tgz', 'gz', 'bz2', 'xz', '7z', 'rar', 'jar']
+export const databaseExtensions: readonly string[] = ['sql', 'dump', 'bak', 'sqlite', 'sqlite3', 'db']
+
+const ascii = (text: string) => Buffer.from(text, 'latin1')
+const startsWith = (content: Buffer, signature: Buffer, offset = 0) =>
+  content.length >= offset + signature.length && content.subarray(offset, offset + signature.length).equals(signature)
+
+/** An ISO BMFF file (`ftyp` box at offset 4) whose major or compatible brands include one of `brands`. */
+function hasBrand(content: Buffer, brands: string[]): boolean {
+  if (!startsWith(content, ascii('ftyp'), 4) || content.length < 16) return false
+  const size = Math.min(content.readUInt32BE(0), content.length)
+  const wanted = new Set(brands)
+  if (wanted.has(content.toString('latin1', 8, 12))) return true
+  for (let offset = 16; offset + 4 <= size; offset += 4) if (wanted.has(content.toString('latin1', offset, offset + 4))) return true
+  return false
+}
+
+const trueType = Buffer.of(0x00, 0x01, 0x00, 0x00)
+
+/** The signature check of each image extension (`svg` is text) and font extension. */
+const signatures: Readonly<Record<string, (content: Buffer) => boolean>> = {
+  png: (content) => startsWith(content, Buffer.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)),
+  jpg: (content) => startsWith(content, Buffer.of(0xff, 0xd8, 0xff)),
+  jpeg: (content) => startsWith(content, Buffer.of(0xff, 0xd8, 0xff)),
+  gif: (content) => startsWith(content, ascii('GIF87a')) || startsWith(content, ascii('GIF89a')),
+  webp: (content) => startsWith(content, ascii('RIFF')) && startsWith(content, ascii('WEBP'), 8),
+  avif: (content) => hasBrand(content, ['avif', 'avis']),
+  bmp: (content) => startsWith(content, ascii('BM')),
+  ico: (content) => startsWith(content, Buffer.of(0x00, 0x00, 0x01, 0x00)),
+  icns: (content) => startsWith(content, ascii('icns')),
+  woff: (content) => startsWith(content, ascii('wOFF')),
+  woff2: (content) => startsWith(content, ascii('wOF2')),
+  ttf: (content) => startsWith(content, trueType) || startsWith(content, ascii('true')),
+  otf: (content) => startsWith(content, ascii('OTTO')) || startsWith(content, trueType),
+  // Embedded OpenType: the magic number 0x504C, little-endian, at offset 34.
+  eot: (content) => startsWith(content, Buffer.of(0x4c, 0x50), 34),
+}
+
+/** The lower-cased extension of the last path segment, or `''`. */
+export function extensionOf(filePath: string): string {
+  const name = filePath.slice(filePath.lastIndexOf('/') + 1)
+  const dot = name.lastIndexOf('.')
+  return dot <= 0 ? '' : name.slice(dot + 1).toLowerCase()
+}
+
+/** True when the content decodes as UTF-8 with a fatal decoder and has no NUL byte. */
+export function isText(content: Buffer): boolean {
+  if (content.includes(0)) return false
+  try {
+    utf8.decode(content)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * `text`: scanned as text. `media`: an image or font whose signature matches
+ * its extension, exported without a text scan. `opaque`: an archive or
+ * database extension, or any other content that is not text.
+ */
+export function classifyContent(filePath: string, content: Buffer, text: boolean = isText(content)): ContentKind {
+  const extension = extensionOf(filePath)
+  if (archiveExtensions.includes(extension) || databaseExtensions.includes(extension)) return 'opaque'
+  if (text) return 'text'
+  const signature = signatures[extension]
+  return signature !== undefined && signature(content) ? 'media' : 'opaque'
+}
+
+/**
+ * The text the secret scan reads from a file that is not UTF-8 text, so an
+ * opaque file exported through `allowFiles` is still scanned when it holds
+ * text in another encoding: UTF-16 when it starts with a byte order mark,
+ * else Latin-1 when it has no NUL byte (a legacy 8-bit text file), else
+ * UTF-16 when its NUL bytes sit where mostly ASCII UTF-16 has them. Binary
+ * content gives null: only `allowFiles` exports it, and it is not scanned.
+ */
+export function decodeForScan(content: Buffer): string | null {
+  if (content.length >= 2 && content[0] === 0xff && content[1] === 0xfe) return content.subarray(2).toString('utf16le')
+  if (content.length >= 2 && content[0] === 0xfe && content[1] === 0xff) {
+    const swapped = Buffer.from(content.subarray(2, content.length - (content.length % 2)))
+    return swapped.swap16().toString('utf16le')
+  }
+  if (!content.includes(0)) return content.toString('latin1')
+  const order = utf16WithoutMark(content)
+  if (order === 'le') return content.toString('utf16le')
+  if (order === 'be') return Buffer.from(content).swap16().toString('utf16le')
+  return null
+}
+
+/**
+ * UTF-16 text without a byte order mark, as Windows tools write it: an even
+ * length, and NUL bytes on nearly every odd offset (little-endian) or every
+ * even offset (big-endian) and almost nowhere else, which is what mostly
+ * ASCII text looks like in UTF-16.
+ */
+function utf16WithoutMark(content: Buffer): 'le' | 'be' | null {
+  if (content.length < 4 || content.length % 2 !== 0) return null
+  let evenZeros = 0
+  let oddZeros = 0
+  for (let index = 0; index < content.length; index += 2) {
+    if (content[index] === 0) evenZeros += 1
+    if (content[index + 1] === 0) oddZeros += 1
+  }
+  const pairs = content.length / 2
+  if (oddZeros >= pairs * 0.9 && evenZeros <= pairs * 0.1) return 'le'
+  if (evenZeros >= pairs * 0.9 && oddZeros <= pairs * 0.1) return 'be'
+  return null
+}

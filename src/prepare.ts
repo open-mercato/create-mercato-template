@@ -7,7 +7,9 @@ import { GitReader, checkGit, isDubiousOwnership, unsafeDirectoryError } from '.
 import { readInventory } from './inventory.js'
 import { type ReportModule, buildManifest, manifestPath, manifestRecord, resolveModules, serializeManifest } from './manifest.js'
 import type { Finding } from './policy/entries.js'
+import { classifyContent, decodeForScan, isText } from './policy/opaque.js'
 import { type OpenMercato, type RootResult, checkRoot } from './policy/root.js'
+import { scanPath, scanText } from './policy/secrets.js'
 import {
   type Excluded,
   type FileRecord,
@@ -41,6 +43,8 @@ export type PrepareOptions = {
   out: string
   /** A10: export the worktree version of changed and untracked files. */
   includeUncommitted?: boolean
+  /** Exact repo-relative paths of opaque files to export (the `--allow-file` flag of spec Step 8). */
+  allowFiles?: readonly string[]
   /** Environment for Git; defaults to `process.env`. */
   environment?: NodeJS.ProcessEnv
   /** Executor for the Git version check; defaults to `run`. */
@@ -50,6 +54,8 @@ export type PrepareOptions = {
 }
 
 export type Notice = { code: string; detail?: string }
+
+export type AllowFile = { path: string; used: boolean }
 
 /** `report.json`, schema 1. Later spec steps add the other catalog fields. */
 export type Report = {
@@ -72,6 +78,8 @@ export type Report = {
   openMercato: OpenMercato | null
   uncommitted: Uncommitted[]
   excluded: Excluded[]
+  /** The `allowFiles` paths, each with `used`: true when it names an opaque file of the snapshot. */
+  allowFiles: AllowFile[]
   /** The module inventory of `src/modules.ts`: the manifest entries with their line, and what could not be read. */
   modules: { entries: ReportModule[]; unparsed: Array<{ line: number; reason: string }> }
   /** Q6. `dependency`: `yarn.lock` resolves `@open-mercato/enterprise`; `modules`: the registered modules from it, with their `when`. */
@@ -101,7 +109,7 @@ const codeOnly: Notice = {
 const checksIncomplete: Notice = {
   code: 'checks-incomplete',
   detail:
-    'This version runs the snapshot core, the root checks, the module inventory and the manifest only. The secret scan, the opaque file check, the other warnings and notices, the declared env in the manifest and the regenerated .env.example come in later versions; the root .env.example is excluded until then.',
+    'This version runs the snapshot core, the root checks, the module inventory, the manifest, the secret scan and the opaque file check only. The other warnings and notices, the declared env in the manifest and the regenerated .env.example come in later versions; the root .env.example is excluded until then.',
 }
 
 const uncommittedNotExported: Notice = {
@@ -225,6 +233,7 @@ export function prepare(options: PrepareOptions): PrepareResult {
   const out = checkOut(options.out, appReal)
   const environment = options.environment ?? process.env
   const includeUncommitted = options.includeUncommitted === true
+  const allowFiles = allowFilesOption(options.allowFiles)
   const now = options.now ?? (() => new Date())
 
   checkGit(options.executor ?? run, appReal, { env: environment })
@@ -250,6 +259,7 @@ export function prepare(options: PrepareOptions): PrepareResult {
   const root: RootResult | null = base.head === null ? null : checkRoot(snapshot.contents)
   let modules: Report['modules'] = { entries: [], unparsed: [] }
   let enterpriseModules: Report['enterprise']['modules'] = []
+  let allowFilesReport: AllowFile[] = allowFiles.map((item) => ({ path: item, used: false }))
   if (root) {
     snapshot.findings.push(...root.findings)
     const inventory = readInventory(snapshot.contents)
@@ -265,6 +275,9 @@ export function prepare(options: PrepareOptions): PrepareResult {
     })
     snapshot.findings.push(...inventory.findings, ...resolved.findings, ...findings)
     addManifest(snapshot, serializeManifest(manifest))
+    const content = checkContents(snapshot, allowFiles)
+    snapshot.findings.push(...content.findings)
+    allowFilesReport = content.allowFiles
     sortFindings(snapshot.findings)
   }
   const errors = snapshot.findings.filter((item) => item.level === 'error')
@@ -287,12 +300,62 @@ export function prepare(options: PrepareOptions): PrepareResult {
     openMercato: root?.openMercato ?? null,
     uncommitted: snapshot.uncommitted,
     excluded: snapshot.excluded,
+    allowFiles: allowFilesReport,
     modules,
     enterprise: { dependency: root?.enterprise.dependency ?? false, modules: enterpriseModules },
     totals: { files: snapshot.files.length, bytes: snapshot.files.reduce((sum, file) => sum + file.size, 0) },
   }
   writeOut(out, snapshot.files, snapshot.contents, report, snapshotId !== null)
   return { exitCode: errors.length === 0 ? 0 : 1, failures: errors, out, snapshotId, report }
+}
+
+function allowFilesOption(value: unknown): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string' || item === ''))
+    throw usage('allowFiles must be a list of repo-relative paths. Nothing was read or written.')
+  return [...new Set(value as string[])]
+}
+
+const opaqueMessage =
+  'Not text, and not an image or font whose content matches its extension (archives and database files are opaque even as text). Remove it from the commit, or export it on purpose by giving its exact path with --allow-file.'
+
+const allowFileUnusedMessage = (reason: string) => `--allow-file names a path that ${reason}, so it has no effect.`
+
+/**
+ * The content checks of every exported file, the generated manifest
+ * included (spec, Opaque files and Secret scan): path-only secret rules on
+ * every file; the secret scan, credential URLs and Yarn auth on every text
+ * file, whatever its extension, and on the UTF-16 or Latin-1 decode of an
+ * opaque file that holds text in another encoding; `opaque-file` for an opaque file whose exact
+ * path is not in `allowFiles`; `allow-file-unused` for an `allowFiles` path
+ * that is not in the snapshot or is not opaque.
+ */
+function checkContents(snapshot: Snapshot, allowFiles: readonly string[]): { findings: Finding[]; allowFiles: AllowFile[] } {
+  const findings: Finding[] = []
+  const opaque = new Set<string>()
+  for (const file of snapshot.files) {
+    const content = snapshot.contents.get(file.path) as Buffer
+    findings.push(...scanPath(file.path))
+    const text = isText(content)
+    const kind = classifyContent(file.path, content, text)
+    // Media (an image or font whose signature matches) is not scanned as text.
+    const scanned = text ? content.toString('utf8') : kind === 'opaque' ? decodeForScan(content) : null
+    if (scanned !== null) findings.push(...scanText(file.path, scanned))
+    if (kind !== 'opaque') continue
+    opaque.add(file.path)
+    if (!allowFiles.includes(file.path)) findings.push({ rule: 'opaque-file', level: 'error', path: file.path, message: opaqueMessage })
+  }
+  const exported = new Set(snapshot.files.map((file) => file.path))
+  const report = allowFiles.map((item) => ({ path: item, used: opaque.has(item) }))
+  for (const item of report)
+    if (!item.used)
+      findings.push({
+        rule: 'allow-file-unused',
+        level: 'warning',
+        path: item.path,
+        message: allowFileUnusedMessage(exported.has(item.path) ? 'is not an opaque file' : 'is not in the snapshot'),
+      })
+  return { findings, allowFiles: report }
 }
 
 /**

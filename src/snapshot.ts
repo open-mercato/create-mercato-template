@@ -39,6 +39,11 @@ export function sha256Hex(content: Buffer | string): string {
   return createHash('sha256').update(content).digest('hex')
 }
 
+/** Code-unit order, the same on every machine (no locale). */
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0
+}
+
 export function compareUtf8(left: string, right: string): number {
   return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8'))
 }
@@ -318,9 +323,15 @@ export function buildSnapshot(input: SnapshotInput): Snapshot {
   }
 }
 
-/** Sorts findings in place by the UTF-8 bytes of the path, then by rule. */
+/** Sorts findings in place by the UTF-8 bytes of the path, then by rule, line and rule id. */
 export function sortFindings(findings: Finding[]): Finding[] {
-  return findings.sort((left, right) => compareUtf8(left.path, right.path) || left.rule.localeCompare(right.rule))
+  return findings.sort(
+    (left, right) =>
+      compareUtf8(left.path, right.path) ||
+      compareCodeUnits(left.rule, right.rule) ||
+      (left.line ?? 0) - (right.line ?? 0) ||
+      compareCodeUnits(left.ruleId ?? '', right.ruleId ?? ''),
+  )
 }
 
 function stripTrailingSlash(item: Buffer): Buffer {
