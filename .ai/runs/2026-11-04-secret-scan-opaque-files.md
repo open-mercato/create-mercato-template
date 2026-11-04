@@ -43,3 +43,4 @@ PR: #8
 ### Phase 2: Docs
 
 - [x] 2.1 docs/guide.md, CHANGELOG.md and AGENTS.md : 61d5c58
+- [x] Post-review fix: dedupe order, scan of UTF-16 and Latin-1 opaque files, line spans, code-unit order : 0c9f555
