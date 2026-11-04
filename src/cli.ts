@@ -1,7 +1,10 @@
-import { safeCommandOutput } from './common.js'
+import { redactMessage } from './common.js'
 import { CliError, type ExitCode, type Failure, exitCodes } from './errors.js'
 import type { Finding } from './policy/entries.js'
+import * as fs from 'node:fs'
+import * as readline from 'node:readline/promises'
 import { type PrepareResult, prepare } from './prepare.js'
+import { type ApprovalSummary, type PublishResult, parseRepo, publish, snapshotIdPattern } from './publish.js'
 import { toolVersion } from './version.js'
 
 export { CliError, exitCodes } from './errors.js'
@@ -50,8 +53,8 @@ const versionFlags = ['--version', '-v']
 
 export const help = `Save an Open Mercato app as a clean GitHub template repository.
 
-Status: in development. prepare works. publish and describe are planned and
-not implemented yet: they check their arguments, exit 2 and change nothing.
+Status: in development. prepare and publish work. describe is planned and
+not implemented yet: it checks its arguments, exits 2 and changes nothing.
 
   npx create-mercato-template prepare [<app>] --out <dir> [--include-uncommitted]
       [--allow-file <path>]... [--keep-env <KEY>]... [--json]
@@ -64,8 +67,8 @@ not implemented yet: they check their arguments, exit 2 and change nothing.
 Commands:
   prepare    build a reviewed snapshot of one pinned commit of the app, offline:
              <dir>/tree (the files to publish) and <dir>/report.json
-  publish    (planned) push exactly that snapshot as a one-commit GitHub
-             template repository
+  publish    check <dir> against its report, then push exactly that snapshot
+             as a one-commit GitHub template repository (needs gh, signed in)
   describe   (planned) print the catalog entry (YAML) for the published template
 
 prepare options:
@@ -79,6 +82,16 @@ prepare options:
   --keep-env <KEY>       keep the non-stock value of KEY in the generated
                          .env.example, when the key does not look secret and
                          the value passes the secret scan; repeatable
+
+publish options:
+  --from <dir>           required: a prepare output directory
+  --repo <owner/name>    required: the GitHub repository to publish to (created
+                         unless --resume finds it)
+  --public, --private    required, exactly one: the repository visibility
+  --expect <snapshotId>  publish only this snapshot, without the prompt;
+                         required with --json or without a terminal
+  --resume               continue a publication of this snapshot, on an empty
+                         repository or one made from this snapshot
 
 Options:
   -h, --help     show this help (plain text, even with --json)
@@ -352,8 +365,75 @@ export const runPrepare: Dispatch = async (_command, args) => {
   })
 }
 
+function usage(message: string): CliError {
+  return new CliError(`${message} Nothing was read or changed.`, exitCodes.usage)
+}
+
+/** Whether `publish` may prompt (Q11): stdin and stdout are both a terminal. */
+export function isInteractive(): boolean {
+  return process.stdin.isTTY === true && process.stdout.isTTY === true
+}
+
+/** The prompt (Q11): repo, visibility, snapshotId and the counts of the verified tree; default no. */
+export async function askApproval(summary: ApprovalSummary): Promise<boolean> {
+  const prompt = readline.createInterface({ input: process.stdin, output: process.stdout })
+  try {
+    const answer = await prompt.question(
+      `Publish snapshot ${summary.snapshotId}\n(${summary.files} files, ${summary.images} images) to ${summary.repo} as a ${summary.visibility} repository? [y/N] `,
+    )
+    return /^(y|yes)$/i.test(answer.trim())
+  } finally {
+    prompt.close()
+  }
+}
+
+/** The envelope fields of `publish` (spec, "--json shape"). */
+function publishFields(result: PublishResult): Record<string, unknown> {
+  return { snapshotId: result.snapshotId, repo: result.repo, commit: result.commit, steps: result.steps, retry: result.retry }
+}
+
+/**
+ * `publish`: every usage problem is exit 2 before any Git read or GitHub
+ * call (it may stat `--from`); then `publish()` runs the eight steps.
+ */
+export const runPublish: Dispatch = async (_command, args) => {
+  const from = args.options['--from']
+  const repo = args.options['--repo']
+  const expect = args.options['--expect']
+  if (typeof from !== 'string') throw usage('publish needs --from <dir>: a prepare output directory.')
+  if (typeof repo !== 'string') throw usage('publish needs --repo <owner/name>.')
+  if (parseRepo(repo) === null) throw usage(`--repo ${repo} is not a GitHub <owner>/<name>.`)
+  if (args.options['--public'] !== true && args.options['--private'] !== true)
+    throw usage('publish needs --public or --private: the repository visibility is never chosen for you.')
+  if (expect !== undefined && (typeof expect !== 'string' || !snapshotIdPattern.test(expect)))
+    throw usage('--expect takes a snapshotId: 64 lower-case hex characters, as prepare prints it.')
+  if (expect === undefined && args.json) throw usage('publish --json needs --expect <snapshotId>: --json never prompts.')
+  if (expect === undefined && !isInteractive()) throw usage('publish needs --expect <snapshotId> when it runs without a terminal.')
+  let stat: fs.Stats | null = null
+  try {
+    stat = fs.statSync(from)
+  } catch {}
+  if (!stat?.isDirectory()) throw usage(`--from ${from} is not a directory. Run prepare first.`)
+  const result = await publish({
+    from,
+    repo,
+    visibility: args.options['--public'] === true ? 'public' : 'private',
+    ...(typeof expect === 'string' ? { expect } : {}),
+    resume: args.options['--resume'] === true,
+    confirm: askApproval,
+  })
+  return outcome({
+    exitCode: result.exitCode,
+    failures: result.failures,
+    fields: publishFields(result),
+    text: result.text,
+    ...(result.exitCode === exitCodes.ok ? {} : { error: result.failures[0]?.message ?? result.failures[0]?.rule ?? 'publish failed.' }),
+  })
+}
+
 /** The commands that are implemented; the others answer "not implemented yet". */
-const dispatchCommand: Dispatch = async (command, args) => (command === 'prepare' ? runPrepare(command, args) : notImplemented(command, args))
+const dispatchCommand: Dispatch = async (command, args) =>
+  command === 'prepare' ? runPrepare(command, args) : command === 'publish' ? runPublish(command, args) : notImplemented(command, args)
 
 const defaultIo: Io = {
   stdout: (text) => process.stdout.write(text),
@@ -365,7 +445,7 @@ const defaultIo: Io = {
  * email addresses: no output field may carry one (spec, "--json shape").
  */
 export function redact(message: string): string {
-  return safeCommandOutput(message).replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g, '[EMAIL]')
+  return redactMessage(message)
 }
 
 const failureCodes: readonly number[] = [exitCodes.check, exitCodes.usage, exitCodes.githubAuth, exitCodes.githubStep]

@@ -1,6 +1,6 @@
 # Usage and development guide
 
-> **Status: in development.** `--help`, `--version`, the argument checks and `prepare` work today. `publish` and `describe` are planned: they check their arguments, then exit with code 2 and change nothing. The design lives in the [Phase 2 spec](https://github.com/open-mercato/create-mercato-template/blob/main/.ai/specs/2026-10-30-create-mercato-template.md); where this guide and the spec differ, the spec wins until a command ships.
+> **Status: in development.** `--help`, `--version`, the argument checks, `prepare` and `publish` work today. `describe` is planned: it checks its arguments, then exits with code 2 and changes nothing. The design lives in the [Phase 2 spec](https://github.com/open-mercato/create-mercato-template/blob/main/.ai/specs/2026-10-30-create-mercato-template.md); where this guide and the spec differ, the spec wins until a command ships.
 
 ## Command reference
 
@@ -34,19 +34,19 @@ With `--json` after a command, stdout carries exactly one JSON object and nothin
   "ok": false,
   "exitCode": 2,
   "tool": { "name": "create-mercato-template", "version": "0.0.0" },
-  "failures": [{ "rule": "usage", "message": "publish is not implemented yet. ..." }]
+  "failures": [{ "rule": "usage", "message": "describe is not implemented yet. ..." }]
 }
 ```
 
 - `command` is `prepare`, `publish` or `describe`, or `null` when the command line does not start with one (`--json` alone, an unknown command, `--json prepare`). The command always comes first.
 - `ok` is true exactly when `exitCode` is 0, and then `failures` is empty.
-- Each failure has a `rule`: `usage` (exit 2), `internal` (exit 1, an error the tool did not expect; its message is redacted like command output, email addresses included, and no stack trace is printed), the Git rules below, `io-error`, and for `prepare` every `error` finding of its report (see below). Each command adds its own fields: `prepare` adds `out`, `snapshotId` and `report`. No field ever holds a secret, a matched string, an env value or an email address.
+- Each failure has a `rule`: `usage` (exit 2), `internal` (exit 1, an error the tool did not expect; its message is redacted like command output, email addresses included, and no stack trace is printed), the Git rules below, `io-error`, and for `prepare` every `error` finding of its report (see below). Each command adds its own fields: `prepare` adds `out`, `snapshotId` and `report`; `publish` adds `snapshotId`, `repo`, `commit`, `steps` and `retry` (see below). No field ever holds a secret, a matched string, an env value or an email address.
 
 Without `--json`, an error prints one message on stderr and nothing on stdout.
 
 ### Git
 
-`prepare` (and `publish`, when it ships) reads Git, and checks Git first:
+`prepare` and `publish` read or run Git, and check Git first:
 
 | Rule | Exit | When | What to do |
 |---|---|---|---|
@@ -96,9 +96,43 @@ What it does, in order:
 - **Output.** With no error: `<out>/tree/` (modes `0644` and `0755`) and then `<out>/report.json`. With an error: only `report.json`, with `snapshotId: null`; it still lists `files`. A failed write of `<out>` is exit 1, rule `io-error`, and a partly written `tree/` is removed. `report.json` (schema 1) holds today `schema`, `tool {name, version, rules}`, `createdAt`, `source {head, dirty, includeUncommitted}`, `stock {version, known}` (the stock table entry of the pinned core version; `known: false` when the table lacks it), `engines` and `packageManager` (from `package.json`), `files [{path, mode, size, sha256, origin, generated?}]`, `snapshotId`, `findings [{rule, level, path, line?, ruleId?, message?}]`, `notices [{code, detail?}]`, `openMercato {version, line}` (the `@open-mercato/core` that `yarn.lock` pins from the registry, for example `0.9.0` and `0.9`; `null` when core is unresolved, a `link:` or workspace, or an npm alias to another package), `uncommitted`, `excluded [{pattern, paths}]`, `allowFiles [{path, used}]`, `env {kept, emptied, declared, dropped}`, `images [{path, size}]`, `modules {entries: [{id, from, package?, when?, line}], unparsed: [{line, reason}]}`, `enterprise {dependency, modules}` (`dependency`: `yarn.lock` resolves `@open-mercato/enterprise`; `modules`: the registered modules from it, each with its `when`; never blocking) and `totals {files, bytes}`. `tool.rules` names the bundled secret rules (see [Secret rules](#secret-rules)): `source {name, tag, path, sha256}` (gitleaks `v8.30.1`, the sha256 of its `config/gitleaks.toml`), `count` (222) and `skipped [{id, reason}]` (none today).
 - **`snapshotId`.** For each file the line `<path>\t<mode>\t<sha256>\n`, sorted by the UTF-8 bytes of the path; `snapshotId` is the lower-case hex sha256 of those lines. Anyone can recompute it from `report.files`.
 
-### `publish --from <dir> --repo <owner/name> (--public | --private)` (planned)
+### `publish --from <dir> --repo <owner/name> (--public | --private)`
 
-Pushes exactly the snapshot in `<dir>` as a one-commit GitHub template repository. Flags: `--expect <snapshotId>`, `--resume`, `--json`.
+Pushes exactly the snapshot in `<dir>` (a `prepare` output) as a one-commit GitHub template repository. It needs Git and the GitHub CLI `gh`, signed in (`gh auth login`). It never reads the source app, and never reads or prints a token: Git asks `gh auth git-credential` for one when it pushes.
+
+```bash
+npx create-mercato-template publish --from ../my-template --repo your-name/my-template --public
+npx create-mercato-template publish --from ../my-template --repo your-name/my-template --public --expect <snapshotId> --json
+```
+
+| Flag | Meaning |
+|---|---|
+| `--from <dir>` | Required. A `prepare` output directory. Not a directory: exit 2. |
+| `--repo <owner/name>` | Required. The GitHub user or organization and the new repository name. A name GitHub would refuse: exit 2. |
+| `--public`, `--private` | Exactly one is required. The visibility is never chosen for you. |
+| `--expect <snapshotId>` | Publish only this snapshot (64 lower-case hex characters), without the prompt. Required with `--json` and when stdin or stdout is not a terminal (exit 2 otherwise). |
+| `--resume` | Continue a publication of this snapshot: the repository must be empty or hold exactly this snapshot's one commit. |
+| `--json` | One envelope on stdout, no prompt. |
+
+The steps, in this order:
+
+1. **`verify`** (local). `<dir>` and `<dir>/tree` must not be symlinks. `report.json` must be readable, have no `error` finding and a `snapshotId` that its `files` give, equal to `--expect`. `<dir>/tree` must hold exactly the files of the report, each a regular file (read once, without following symlinks) with the report's size, sha256 and exec bit. These bytes are the ones pushed; nothing is read from disk again. Any difference is exit 1, rule `snapshot-modified`, with `reason`: `file-changed`, `file-added`, `file-missing`, `expect-mismatch`, `report-errors` or `report-missing`. Then the Git check (above).
+2. **The prompt**, only without `--expect`, on a terminal: it shows the repository, the visibility, the `snapshotId` and the file and image counts of the verified tree (never read from `report.json`). The default is no. Answering no is exit 1, rule `publish-declined`, nothing remote. There is no `--yes`: use `--expect`.
+3. **Auth.** `gh` missing or `gh auth status` failing is exit 3, rule `github-auth`, with the `gh auth login` hint.
+4. **Repository state**, one read (`gh api repos/<owner>/<name>`). Only HTTP 404 means missing. Any other failure stops before any change: exit 4, step `create` failed with `detail: "repo-read"`. A repository that exists without `--resume` is exit 1, `repo-name-exists`; with a visibility other than the flag, exit 1, `visibility-mismatch`.
+5. **The commit**, built locally before any remote change, in a temporary repository with no hooks: the verified bytes, the report's modes, a tree checked against the snapshot, and one commit with no signature (a `commit.gpgsign` setting never prompts). Author and committer are the signed-in account's noreply address (`<id>+<login>@users.noreply.github.com`), never your Git identity, so a private email address never reaches the repository. Message: `Create template from snapshot <snapshotId>`, a blank line, `Created with create-mercato-template <version>.` No source commit, no history.
+6. **`create`**: `gh repo create` with the visibility and the manifest description (when it is one line of at most 350 characters). Skipped when the repository exists.
+7. **`push`**: a clone without checkout decides the state. An empty repository gets the one commit on `main`, never force-pushed. A repository with one branch, one commit and the snapshot's tree is skipped, and its commit is recorded. Anything else (another commit, another branch, a tag) is exit 1, `repo-not-from-snapshot`, unchanged, and `publication.json` does not name it. A push refused because the token lacks the `workflow` scope (a snapshot with `.github/workflows/*`) is exit 4 with `detail: "workflow-scope"`: run `gh auth refresh -s workflow`, then `--resume`.
+8. **`template-flag`**: marks the repository as a template, checked in GitHub's answer.
+9. **`topics`**: adds `open-mercato-template` and `open-mercato`, never replacing other topics.
+
+`<dir>/publication.json` (schema 1: `snapshotId`, `repo {fullName, url, visibility}`, `commit {sha, tree}`, `steps`, `at`) is rewritten after each step; it is not part of the snapshot and never holds a token. With `--json` the envelope adds `snapshotId`, `repo`, `commit`, `steps` (`[{name, status, detail?}]`, `name` in `verify`, `create`, `push`, `template-flag`, `topics`, `status` in `done`, `failed`, `skipped`; the steps after a failure are not listed) and `retry`. A failed GitHub step, a `gh` that times out included, is exit 4, rule `github-step` with `step` and `detail` when known, and `retry` holds the command that continues it. Command output in a message is redacted: tokens and email addresses never appear.
+
+```bash
+npx create-mercato-template@<version> publish --from <dir> --repo <owner/name> --<visibility> --expect <snapshotId> --resume
+```
+
+`--resume` creates a repository that is still missing, pushes to an empty one, and skips the push when the repository already holds this snapshot. The tool never force-pushes, deletes or rewrites a repository.
 
 ### `describe --from <dir>` (planned)
 
@@ -109,8 +143,8 @@ Prints the catalog entry for the published template. Flags: `--repo <owner/name>
 | Code | Meaning |
 |---|---|
 | 0 | Done. |
-| 1 | A check failed, the snapshot does not verify, or publication is refused. No remote change. Also a missing or too old `git` and unexpected errors (`internal`). |
-| 2 | Usage error. Today also: `publish` and `describe` are not implemented yet. |
+| 1 | A check failed, the snapshot does not verify, or publication is refused. No remote change. Also a missing or too old `git` and unexpected errors (`internal`). One exception: `publish` failing to write `publication.json` (`io-error`) after a GitHub step; the envelope then keeps `retry`. |
+| 2 | Usage error. Today also: `describe` is not implemented yet. |
 | 3 | GitHub auth missing (`gh` not installed or `gh auth status` fails). `publish` only. |
 | 4 | A GitHub step failed. The JSON says which steps finished. `publish` only. |
 
@@ -134,7 +168,7 @@ npm test
 npm pack --dry-run
 ```
 
-The implementation is strict TypeScript under `src/`, compiled to `dist/`; the small CommonJS bin only starts the compiled CLI. Tests run with `node --test` against `dist/`. Tests that read Git build fixture repositories in a temp directory with `test/helpers/fixture-app.cjs`, which writes a minimal valid Open Mercato app (`package.json` on `@open-mercato/core` with `packageManager: yarn@4.x`, a Yarn 4 `yarn.lock`, `src/modules.ts`, `.env.example`, `README.md`) and runs Git with an isolated configuration. External commands run through `run` or an injected `Executor` (`src/common.ts`, argument arrays, never a shell), so tests replace them with fake executors, a fake `git` on `PATH`, local Git repositories or a local `gh` shim; no test touches github.com or npmjs.com.
+The implementation is strict TypeScript under `src/`, compiled to `dist/`; the small CommonJS bin only starts the compiled CLI. Tests run with `node --test` against `dist/`. Tests that read Git build fixture repositories in a temp directory with `test/helpers/fixture-app.cjs`, which writes a minimal valid Open Mercato app (`package.json` on `@open-mercato/core` with `packageManager: yarn@4.x`, a Yarn 4 `yarn.lock`, `src/modules.ts`, `.env.example`, `README.md`) and runs Git with an isolated configuration. External commands run through `run` or an injected `Executor` (`src/common.ts`, argument arrays, never a shell), so tests replace them with fake executors, a fake `git` on `PATH`, local Git repositories or a local `gh` shim; no test touches github.com or npmjs.com. The `publish` tests run against `test/release-e2e/gh-shim.mjs` (copied from `create-mercato-module`, source in `test/release-e2e/SOURCE.md`), which answers from local bare repositories and logs every mutating call, behind `test/helpers/gh-wrapper.mjs`, which logs every call and can fail one command once. They isolate the user's Git configuration (`HOME`, `GIT_CONFIG_GLOBAL`) and assert that a fake token appears in no output or file.
 
 The module inventory tests read vendored copies of the scaffold's `src/modules.ts` and `src/official-modules.generated.ts` at open-mercato `v0.9.0` and `main` `a447cc552` (`test/fixtures/scaffold/`, byte for byte, refs and sha256 in `SOURCE.md` there), and validate the manifest against `test/fixtures/catalog/mercato-template-1.json`, a draft written from the catalog spec until the catalog publishes its schema. A small validator in `test/helpers/json-schema.cjs` covers the keywords those schemas use.
 
