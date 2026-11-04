@@ -3,7 +3,8 @@
 // no new dependency. An unknown keyword throws before any value is checked,
 // so a schema that grows a keyword this file does not know fails loudly
 // instead of passing silently. `$ref` resolves local pointers (`#`, `#/...`)
-// only. `format` is an annotation, as it is by default in 2020-12.
+// only, and a `$ref` cycle that never descends into the value throws.
+// `format` is an annotation, as it is by default in 2020-12.
 const annotations = new Set([
   '$schema',
   '$id',
@@ -106,6 +107,30 @@ function resolveRef(root, ref) {
   return target
 }
 
+// The `$ref`s being followed now, each with the values it is applied to. A
+// JSON value never contains itself, so the same ref on the same value again
+// means the refs loop without reading any deeper into the value.
+const following = new Map()
+
+function checkRef(ref, value, pointer, root) {
+  const values = following.get(ref) ?? new Set()
+  if (values.has(value)) throw new Error(`json-schema.cjs: $ref cycle at ${ref}`)
+  values.add(value)
+  following.set(ref, values)
+  try {
+    return check(resolveRef(root, ref), value, pointer, root)
+  } finally {
+    values.delete(value)
+    if (values.size === 0) following.delete(ref)
+  }
+}
+
+/** `value / step` is a whole number, give or take the rounding of binary floats (0.07 is a multiple of 0.01). */
+function isMultipleOf(value, step) {
+  const quotient = value / step
+  return Math.abs(quotient - Math.round(quotient)) < 1e-9
+}
+
 function passes(schema, value, root) {
   return check(schema, value, '', root).length === 0
 }
@@ -120,7 +145,7 @@ function check(schema, value, pointer, root) {
   if (schema === true) return []
   if (schema === false) return [`${at}: not allowed`]
   const problems = []
-  if (schema.$ref !== undefined) problems.push(...check(resolveRef(root, schema.$ref), value, pointer, root))
+  if (schema.$ref !== undefined) problems.push(...checkRef(schema.$ref, value, pointer, root))
   if (schema.type !== undefined) {
     const types = Array.isArray(schema.type) ? schema.type : [schema.type]
     if (!types.some((type) => matchesType(value, type))) return [...problems, `${at}: expected ${types.join(' or ')}, got ${typeOf(value)}`]
@@ -138,7 +163,7 @@ function check(schema, value, pointer, root) {
     if (schema.maximum !== undefined && value > schema.maximum) problems.push(`${at}: above ${schema.maximum}`)
     if (schema.exclusiveMinimum !== undefined && value <= schema.exclusiveMinimum) problems.push(`${at}: not above ${schema.exclusiveMinimum}`)
     if (schema.exclusiveMaximum !== undefined && value >= schema.exclusiveMaximum) problems.push(`${at}: not below ${schema.exclusiveMaximum}`)
-    if (schema.multipleOf !== undefined && !Number.isInteger(value / schema.multipleOf)) problems.push(`${at}: not a multiple of ${schema.multipleOf}`)
+    if (schema.multipleOf !== undefined && !isMultipleOf(value, schema.multipleOf)) problems.push(`${at}: not a multiple of ${schema.multipleOf}`)
   }
   if (Array.isArray(value)) {
     if (schema.minItems !== undefined && value.length < schema.minItems) problems.push(`${at}: fewer than ${schema.minItems} items`)

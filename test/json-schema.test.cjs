@@ -58,6 +58,9 @@ test('strings and numbers', () => {
   invalid({ exclusiveMaximum: 10 }, 10, 'not below 10')
   invalid({ minimum: 1 }, 0, 'below 1')
   invalid({ maximum: 1 }, 2, 'above 1')
+  valid({ multipleOf: 0.01 }, 0.07)
+  valid({ multipleOf: 0.1 }, 0.3)
+  invalid({ multipleOf: 0.01 }, 0.075, 'not a multiple of 0.01')
 })
 
 test('arrays: items, prefixItems, contains, uniqueItems and the bounds', () => {
@@ -120,6 +123,11 @@ test('boolean schemas, local $ref and $defs, and the annotations', () => {
   invalid(schema, { one: 2 }, '/one: expected 1')
   assert.throws(() => validate({ $ref: 'https://example.com/x.json' }, 1), /local \$ref only/)
   assert.throws(() => validate({ $ref: '#/$defs/missing' }, 1), /does not resolve/)
+  assert.throws(() => validate({ $ref: '#' }, 1), /\$ref cycle at #/)
+  assert.throws(() => validate({ $defs: { a: { $ref: '#/$defs/b' }, b: { $ref: '#/$defs/a' } }, $ref: '#/$defs/a' }, 1), /\$ref cycle at #\/\$defs\/a/)
+  const tree = { properties: { name: { type: 'string' }, children: { type: 'array', items: { $ref: '#' } } } }
+  valid(tree, { name: 'a', children: [{ name: 'b', children: [{ name: 'c' }] }, { name: 'd' }] })
+  invalid(tree, { children: [{ children: [{ name: 1 }] }] }, '/children/0/children/0/name: expected string')
   valid({ title: 't', description: 'd', default: 1, examples: [1], format: 'email', deprecated: false, readOnly: true, writeOnly: false, $comment: 'c' }, 'not an email')
 })
 
