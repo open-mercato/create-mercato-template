@@ -1,6 +1,6 @@
 {
   "name": "create-mercato-template",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Save an Open Mercato app as a clean GitHub template repository.",
   "homepage": "https://github.com/open-mercato/create-mercato-template#readme",
   "repository": {

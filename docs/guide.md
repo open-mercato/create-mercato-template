@@ -1,6 +1,6 @@
 # Usage and development guide
 
-> **Status: in development.** `--help`, `--version`, the argument checks and the three commands, `prepare`, `publish` and `describe`, work today. Nothing is published to npm yet. The design lives in the [Phase 2 spec](https://github.com/open-mercato/create-mercato-template/blob/main/.ai/specs/2026-10-30-create-mercato-template.md); where this guide and the spec differ, the spec wins until a command ships.
+> **Version 0.1.0.** `--help`, `--version` and the three commands, `prepare`, `publish` and `describe`, work. The package is not on npm yet: until it is, run the commands from GitHub as [Try it before the npm release](#try-it-before-the-npm-release) shows. The examples below use the npm form, `npx create-mercato-template <command>`. The design lives in the [Phase 2 spec](https://github.com/open-mercato/create-mercato-template/blob/main/.ai/specs/2026-10-30-create-mercato-template.md).
 
 ## Command reference
 
@@ -33,7 +33,7 @@ With `--json` after a command, stdout carries exactly one JSON object and nothin
   "command": "prepare",
   "ok": false,
   "exitCode": 2,
-  "tool": { "name": "create-mercato-template", "version": "0.0.0" },
+  "tool": { "name": "create-mercato-template", "version": "0.1.0" },
   "failures": [{ "rule": "usage", "message": "describe needs --from <dir>: a prepare output directory. ..." }]
 }
 ```
@@ -93,7 +93,7 @@ What it does, in order:
 - **Review warnings** (never blocking): `image` for every image (an SVG, or a file with an image extension whose content matches it), with sizes in `report.images [{path, size}]`; `executable-config` for `.yarnrc.yml` `yarnPath` or `plugins`, files in `.github/workflows/` and `package.json` scripts that run on install or publish (`preinstall`, `install`, `postinstall`, `prepare`, `prepack`, `postpack`, `prepublish`, `prepublishOnly`, `publish`, `postpublish`); `ai-content` once, with the count of exported files under `.ai/`; `seed-email` for an email address outside `example.com`, `acme.com`, their subdomains and the reserved names (`.test`, `.example`, `.invalid`, `localhost`) in a seed file (`src/modules/<module>/setup.ts`, or any path with `seed` in a directory or file name), by path and line only; `readme-missing` (no root `README.md`) or `readme-stock` (the stock `create-mercato-app` README); `exceeds-import-limits` when the snapshot has more than 5,000 files or 50 MB (the import limits planned for `create-mercato-app --template`). A stock app always has some: its images, its `preinstall` script, no README and the conditional `storage_s3` module.
 - **Notices** (never blocking): `code-only`, always; `uncommitted-not-exported`; `stock-unknown` when the Open Mercato version is not in the stock table (values are then matched against every known version); `enterprise-dependency` when `yarn.lock` resolves `@open-mercato/enterprise` or a module comes from it; `derived-from-template` when `package.json` has `openMercatoTemplate` (kept as it is).
 - **Uncommitted changes** are always listed in `report.uncommitted` (`modified`, `added`, `deleted`, `untracked`), found without `git status`: each tracked path is compared with the commit by hashing it in JS, the index gives added files, `git ls-files --others --exclude-standard` gives untracked ones (ignored files such as `.env` are never listed or read, and neither are paths on the deny list or marked `export-ignore`; with `--include-uncommitted` those are listed under `excluded`). By default they are not exported, with the notice `uncommitted-not-exported`. With `--include-uncommitted` the worktree version is exported (`origin: "worktree"`) and deleted files leave the snapshot; each file is opened once without following symlinks, and a file under a directory that is a symlink is `entry-symlink`, its content never read.
-- **Output.** With no error: `<out>/tree/` (modes `0644` and `0755`) and then `<out>/report.json`. With an error: only `report.json`, with `snapshotId: null`; it still lists `files`. A failed write of `<out>` is exit 1, rule `io-error`, and a partly written `tree/` is removed. `report.json` (schema 1) holds today `schema`, `tool {name, version, rules}`, `createdAt`, `source {head, dirty, includeUncommitted}`, `stock {version, known}` (the stock table entry of the pinned core version; `known: false` when the table lacks it), `engines` and `packageManager` (from `package.json`), `files [{path, mode, size, sha256, origin, generated?}]`, `snapshotId`, `findings [{rule, level, path, line?, ruleId?, message?}]`, `notices [{code, detail?}]`, `openMercato {version, line}` (the `@open-mercato/core` that `yarn.lock` pins from the registry, for example `0.9.0` and `0.9`; `null` when core is unresolved, a `link:` or workspace, or an npm alias to another package), `uncommitted`, `excluded [{pattern, paths}]`, `allowFiles [{path, used}]`, `env {kept, emptied, declared, dropped}`, `images [{path, size}]`, `modules {entries: [{id, from, package?, when?, line}], unparsed: [{line, reason}]}`, `enterprise {dependency, modules}` (`dependency`: `yarn.lock` resolves `@open-mercato/enterprise`; `modules`: the registered modules from it, each with its `when`; never blocking) and `totals {files, bytes}`. `tool.rules` names the bundled secret rules (see [Secret rules](#secret-rules)): `source {name, tag, path, sha256}` (gitleaks `v8.30.1`, the sha256 of its `config/gitleaks.toml`), `count` (222) and `skipped [{id, reason}]` (none today).
+- **Output.** With no error: `<out>/tree/` (modes `0644` and `0755`) and then `<out>/report.json`. With an error: only `report.json`, with `snapshotId: null`; it still lists `files`. A failed write of `<out>` is exit 1, rule `io-error`, and a partly written `tree/` is removed. `report.json` (schema 1) holds `schema`, `tool {name, version, rules}`, `createdAt`, `source {head, dirty, includeUncommitted}`, `stock {version, known}` (the stock table entry of the pinned core version; `known: false` when the table lacks it), `engines` and `packageManager` (from `package.json`), `files [{path, mode, size, sha256, origin, generated?}]`, `snapshotId`, `findings [{rule, level, path, line?, ruleId?, message?}]`, `notices [{code, detail?}]`, `openMercato {version, line}` (the `@open-mercato/core` that `yarn.lock` pins from the registry, for example `0.9.0` and `0.9`; `null` when core is unresolved, a `link:` or workspace, or an npm alias to another package), `uncommitted`, `excluded [{pattern, paths}]`, `allowFiles [{path, used}]`, `env {kept, emptied, declared, dropped}`, `images [{path, size}]`, `modules {entries: [{id, from, package?, when?, line}], unparsed: [{line, reason}]}`, `enterprise {dependency, modules}` (`dependency`: `yarn.lock` resolves `@open-mercato/enterprise`; `modules`: the registered modules from it, each with its `when`; never blocking) and `totals {files, bytes}`. `tool.rules` names the bundled secret rules (see [Secret rules](#secret-rules)): `source {name, tag, path, sha256}` (gitleaks `v8.30.1`, the sha256 of its `config/gitleaks.toml`), `count` (222) and `skipped [{id, reason}]` (none today).
 - **`snapshotId`.** For each file the line `<path>\t<mode>\t<sha256>\n`, sorted by the UTF-8 bytes of the path; `snapshotId` is the lower-case hex sha256 of those lines. Anyone can recompute it from `report.files`.
 
 ### `publish --from <dir> --repo <owner/name> (--public | --private)`
@@ -186,13 +186,26 @@ With `--json` the envelope adds `path` (`templates/<owner>/<repo>.yml`), `yaml` 
 | 3 | GitHub auth missing (`gh` not installed or `gh auth status` fails). `publish` only. |
 | 4 | A GitHub step failed. The JSON says which steps finished. `publish` only. |
 
-## Try the GitHub version
+## Try it before the npm release
 
-Run directly from this repository:
+Requirements:
+
+- Node.js 24 or newer.
+- Git 2.40 or newer, for `prepare` and `publish`.
+- For `publish`: the GitHub CLI `gh`, signed in (`gh auth login`). A snapshot with `.github/workflows/*` also needs the `workflow` scope (`gh auth refresh -s workflow`).
+- The app: an Open Mercato app on Yarn 4, at the top level of a Git repository with at least one commit. `prepare` reads the committed files, so commit your changes first (or pass `--include-uncommitted`).
+
+The package is not on npm yet. Run the commands from the `main` branch of this repository; npm downloads it, installs its build dependencies and compiles it on the first run:
 
 ```bash
-npx --package github:open-mercato/create-mercato-template create-mercato-template --help
+cd my-app
+npx --package github:open-mercato/create-mercato-template create-mercato-template prepare --out ../my-template
+# Review ../my-template/report.json and ../my-template/tree.
+npx --package github:open-mercato/create-mercato-template create-mercato-template publish --from ../my-template --repo your-name/my-template --public
+npx --package github:open-mercato/create-mercato-template create-mercato-template describe --from ../my-template
 ```
+
+Every flag of this guide works the same way. To pin a commit, write `github:open-mercato/create-mercato-template#<sha>`. A `retry` command printed by a failed `publish` names the npm form (`npx create-mercato-template@<version>`); before the npm release, run it with `--package github:open-mercato/create-mercato-template` instead. After the npm release, use `npx create-mercato-template <command>`.
 
 ## Development
 
@@ -230,7 +243,7 @@ A run scaffolds an app (`--preset empty --agents none --no-init-git`), installs 
 
 ### Stock table
 
-The tool recognizes the values a fresh `create-mercato-app` scaffold ships with, so a stock app does not fail its own checks. `src/stock/table.json` holds, for every stable `create-mercato-app` version on npm (0.4.5 to 0.9.0 today; prereleases such as `-canary-` and `-develop.` are skipped): the stock `.env.example` (identical files stored once, by sha256), each key with its stock values, active and commented, every credential URL string (`scheme://user:password@host`) in any text file of the scaffold, and the sha256 of a stock root `README.md` when there is one. `src/stock.ts` looks entries up by the app's pinned `@open-mercato/core` version, which releases in lockstep with `create-mercato-app`. An unknown version (newer than the tool, or a prerelease) is matched against every known version and reported as `known: false`; no check changes because of it. The commands use the table from the steps that ship them.
+The tool recognizes the values a fresh `create-mercato-app` scaffold ships with, so a stock app does not fail its own checks. `src/stock/table.json` holds, for every stable `create-mercato-app` version on npm (0.4.5 to 0.9.0 today; prereleases such as `-canary-` and `-develop.` are skipped): the stock `.env.example` (identical files stored once, by sha256), each key with its stock values, active and commented, every credential URL string (`scheme://user:password@host`) in any text file of the scaffold, and the sha256 of a stock root `README.md` when there is one. `src/stock.ts` looks entries up by the app's pinned `@open-mercato/core` version, which releases in lockstep with `create-mercato-app`. An unknown version (newer than the tool, or a prerelease) is matched against every known version and reported as `known: false`; no check changes because of it. `prepare` uses it for the env diff, the credential URLs and the README check.
 
 The table is generated and committed, never edited by hand:
 
