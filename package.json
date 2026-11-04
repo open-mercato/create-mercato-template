@@ -39,7 +39,8 @@
     "stock-table": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/build-stock-table.mts",
     "secret-rules": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/build-secret-rules.mts",
     "prepack": "npm run build",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "test:release:local": "node test/release-e2e/local.mts"
   },
   "dependencies": {
     "typescript": "6.0.3",

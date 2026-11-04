@@ -12,5 +12,5 @@
     "erasableSyntaxOnly": true,
     "declaration": false
   },
-  "include": ["scripts/**/*.mts", "src/**/*.ts"]
+  "include": ["scripts/**/*.mts", "test/release-e2e/**/*.mts", "src/**/*.ts"]
 }

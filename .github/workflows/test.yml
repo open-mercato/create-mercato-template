@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -48,6 +49,66 @@ jobs:
       - run: npm test
       - run: npm pack --dry-run
 
-  # Phase 2 Step 11 adds a release-checks job here: save an app with this tool,
-  # publish it to a local gh shim, create a new app from it with
-  # create-mercato-app --app-url, then install, start and sign in. No secrets.
+  # Save then import (spec Step 11): scaffold an app with create-mercato-app,
+  # save it with this tool (prepare, then publish to the local gh shim), create
+  # a new app from it with create-mercato-app --app-url through a GitHub API
+  # stand-in on 127.0.0.1, then install, initialize, build, start and sign in.
+  # The job holds no secret and a read-only token: "GitHub" is a set of bare
+  # repositories in the runner's temp directory, nothing is published to npm,
+  # and the import cannot fetch anything but the loopback stand-in.
+  release-checks:
+    name: Save then import (local, no secrets; ${{ matrix.scaffold }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The release users get today. Required.
+          - scaffold: create-mercato-app@0.9.0
+          # Whatever a new user gets right now: catches scaffold changes early.
+          # A failure only here can be upstream drift.
+          - scaffold: create-mercato-app@latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: corepack enable
+      - run: npm ci
+      - run: npm run build
+      - name: Start a throwaway database
+        run: |
+          # A new password for every run, masked in the log, never stored.
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::$password"
+          docker run -d --name mercato-e2e-db -p 127.0.0.1:54329:5432 \
+            -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$password" -e POSTGRES_DB=open-mercato \
+            -v "$PWD/test/release-e2e/postgres-init.sql:/docker-entrypoint-initdb.d/00-extensions.sql:ro" \
+            pgvector/pgvector@sha256:724a4041afdb1750446e3f6b5cfa8f3b0ac5a2cf538ddfa6bfee4f94c2fa85c6 # pg17-trixie
+          echo "RELEASE_E2E_DATABASE_URL=postgres://postgres:$password@127.0.0.1:54329/open-mercato" >> "$GITHUB_ENV"
+          for attempt in $(seq 1 60); do
+            if docker exec mercato-e2e-db psql -U postgres -h 127.0.0.1 -d open-mercato -c 'select 1' >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          docker logs mercato-e2e-db
+          exit 1
+      - name: Save then import
+        env:
+          CREATE_APP: ${{ matrix.scaffold }}
+        run: >-
+          npm run test:release:local --
+          --create-app "$CREATE_APP"
+          --results "$RUNNER_TEMP/release-checks"
+      - name: Keep diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-checks-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/release-checks/*.log
+            ${{ runner.temp }}/release-checks/local-results.json
+          retention-days: 7
