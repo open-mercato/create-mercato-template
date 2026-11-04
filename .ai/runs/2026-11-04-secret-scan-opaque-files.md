@@ -30,14 +30,16 @@ Ship Step 7 of the spec's Implementation Plan: the secret scan over every export
 
 ## Progress
 
+PR: #8
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` : <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Code
 
-- [ ] 1.1 Extra rules, secret scan, credential URLs and yarn auth
-- [ ] 1.2 Opaque files and the allowFiles option
-- [ ] 1.3 Tests for every Step 7 case
+- [x] 1.1 Extra rules, secret scan, credential URLs and yarn auth : d7d3976
+- [x] 1.2 Opaque files and the allowFiles option : d7d3976
+- [x] 1.3 Tests for every Step 7 case : 3b2ffd1, ecb0b25
 
 ### Phase 2: Docs
 
-- [ ] 2.1 docs/guide.md, CHANGELOG.md and AGENTS.md
+- [x] 2.1 docs/guide.md, CHANGELOG.md and AGENTS.md : 61d5c58
