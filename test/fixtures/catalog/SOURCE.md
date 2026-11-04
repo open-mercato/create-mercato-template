@@ -5,13 +5,13 @@ The catalog (`open-mercato/modules`) owns the schema of a catalog entry `templat
 ## Source
 
 - Repository: `open-mercato/modules`, branch `feat/templates-catalog` (catalog Phase 1a steps 1 and 4), not merged to `main` yet.
-- Schemas: commit `2d2c8899d43a1a6e549d98bdfca1ae0525945ea3`, files `test/schema/golden/template-1.json` and `test/schema/golden/mercato-template-1.json`. The catalog writes them from `lib/schema/template.ts` and `lib/schema/json-schema.ts` with `yarn vitest run test/schema/template.test.ts -u`, which calls `schemaFiles(DEFAULT_SITE_URL)` from `lib/emit/schemas.ts`, the same code as `yarn om emit`. They are the files the catalog will serve.
+- Schemas: branch tip `2332ca50d09b5a0fc94dc7677c2e1aa4aebb42d3`, files `test/schema/golden/template-1.json` and `test/schema/golden/mercato-template-1.json`. The catalog writes them from `lib/schema/template.ts` and `lib/schema/json-schema.ts` with `yarn vitest run test/schema/template.test.ts -u`, which calls `schemaFiles(DEFAULT_SITE_URL)` from `lib/emit/schemas.ts`, the same code as `yarn om emit`. They are the files the catalog will serve.
 - Inventory fixtures: commit `0e77e8d2736c0f689841a0bf2a9511009cf78771`, directory `test/fixtures/templates/modules-from-modules-ts/`, copied whole into `modules-from-modules-ts/` here. Its own `SOURCE.md` describes the layout and the scaffold files it holds.
 - Copied on 2026-11-04, byte for byte. A test checks the sha256 values below, so an edit fails it.
 
 | File | sha256 |
 | --- | --- |
-| `template-1.json` | `10c029b0a2a5e3cd4011c4135a82368eb9a00636811ac0ae0aa5008ec160ace9` |
+| `template-1.json` | `d71cb563bcd365d8e4d2d8ea811ac79fb8de85e0e892501edb4a3792e1b0df72` |
 | `mercato-template-1.json` | `920b2ab11e4905cb5d08498301a4c43a4d884e9d7a60bf852d66376fb6fa04de` |
 
 ## Check after the catalog deploys

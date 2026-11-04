@@ -138,6 +138,13 @@ test('template-1.json: a status other than active needs a reason, as the catalog
   valid(templateSchema, { ...entry, status: 'hold', reason: 'Waiting for the maintainer to fix the import.' })
 })
 
+test('template-1.json: ref follows the git ref name rules and refuses pull refs', () => {
+  for (const ref of ['main', 'v1.0.0', 'feature/x', 'release-0.1'])
+    valid(templateSchema, { ...entry, ref })
+  for (const ref of ['pull/1/head', 'refs/pull/1/head', 'a/../b', 'a..b', 'x.lock', 'x.lock/y', '.hidden', 'a/.b', 'a//b', '/x', 'x/', 'x.'])
+    invalid(templateSchema, { ...entry, ref }, '/ref: does not match')
+})
+
 test('template-1.json: smoke with login false needs ready and at least one path', () => {
   invalid(templateSchema, { ...entry, smoke: { login: false } }, 'missing ready')
   invalid(templateSchema, { ...entry, smoke: { login: false, ready: '/' } }, 'missing paths')
