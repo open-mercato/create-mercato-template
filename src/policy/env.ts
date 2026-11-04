@@ -44,10 +44,14 @@ const activeAssignment = /^(\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=)(.*)$/
 // prose such as `# note=hello` stays a comment.
 const commentedAssignment = /^(\s*#\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)=)(.*)$/
 
-/** The index of the first `quote` in `text` from `start` (`\"` escapes in double quotes), or -1. */
+/**
+ * The index of the first `quote` in `text` from `start`, or -1. A backslash
+ * escapes the next character in double and single quotes (as dotenv reads
+ * them), never in backticks.
+ */
 function closingQuote(text: string, quote: string, start: number): number {
   for (let index = start; index < text.length; index++) {
-    if (quote === '"' && text[index] === '\\') {
+    if (quote !== '`' && text[index] === '\\') {
       index++
       continue
     }
@@ -58,13 +62,14 @@ function closingQuote(text: string, quote: string, start: number): number {
 
 /**
  * Whether `value` can be read on one line: `ok` when it is unquoted, or one
- * quoted string (single or double, `\"` escapes in double quotes) followed by
+ * quoted string (double, single or backtick quotes, which dotenv reads across
+ * lines) followed by
  * nothing or by an inline comment; `open` when its quote is not closed on
  * this line (a multi-line value); `bad` otherwise.
  */
 function readValue(value: string): 'ok' | 'open' | 'bad' {
   const quote = value[0]
-  if (quote !== '"' && quote !== "'") return 'ok'
+  if (quote !== '"' && quote !== "'" && quote !== '`') return 'ok'
   const end = closingQuote(value, quote, 1)
   if (end < 0) return 'open'
   return /^(?:\s+#.*)?\s*$/.test(value.slice(end + 1)) ? 'ok' : 'bad'

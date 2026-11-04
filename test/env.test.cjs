@@ -303,7 +303,8 @@ test('buildEnv keeps line positions and never puts a value in a finding', () => 
 })
 
 test('regression: a multi-line quoted value is dropped up to its closing quote; no fragment reaches a message, the report or the file', () => {
-  const fragment = randomText('ml-b64', 40)
+  // Starts with a letter, so the line would parse as KEY= without the fix.
+  const fragment = `MII${randomText('ml-b64', 40)}`
   const env = ['APP_URL=http://localhost:3000', 'WELCOME_TEXT="Hello', `${fragment}=`, 'more text', 'bye"', '# A note after it.', 'SHOP_THEME=dark', ''].join('\n')
   const run1 = run(createFixtureRepo({ '.env.example': env }))
   const { result, out, report } = run1
@@ -316,6 +317,9 @@ test('regression: a multi-line quoted value is dropped up to its closing quote; 
   // A commented line with an open quote is one line: the next lines are read.
   const commented = parseEnvLines(['# NOTE="open', 'A_KEY=x', ''].join('\n'))
   assert.deepEqual(commented.map((line) => line.kind), ['dropped', 'assignment'])
+  // Backtick values span lines too (dotenv), with no escapes; in single quotes \' does not close.
+  assert.deepEqual(parseEnvLines(['A=`x', 'MIIBabc=', 'end`', 'B=1'].join('\n')).map((line) => line.kind), ['dropped', 'dropped', 'dropped', 'assignment'])
+  assert.deepEqual(parseEnvLines(["A='x\\'", "FRAG=y'", 'B=1'].join('\n')).map((line) => line.kind), ['dropped', 'dropped', 'assignment'])
   // An unclosed quote at the end drops every line after it.
   assert.deepEqual(parseEnvLines(['A="x', 'B=y', 'C=z'].join('\n')).map((line) => line.kind), ['dropped', 'dropped', 'dropped'])
 })
