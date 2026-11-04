@@ -69,21 +69,20 @@ test('help wins over every usage error where a flag is expected', () => {
 
 test('--help and -h as the value of a flag do not print help', () => {
   // prepare --out --help is in test/prepare-cli.test.cjs: prepare runs now.
+  // publish --from --help reads --help as the directory, then asks for --repo.
   for (const args of [['describe', '--summary', '--help'], ['describe', '--summary', '-h'], ['publish', '--from', '--help']]) {
     const result = cli(...args)
     assert.equal(result.status, 2, JSON.stringify(args))
     assert.equal(result.stdout, '')
-    assert.match(result.stderr, new RegExp(`${args[0]} is not implemented yet`))
+    assert.match(result.stderr, args[0] === 'publish' ? /publish needs --repo/ : new RegExp(`${args[0]} is not implemented yet`))
     assert.deepEqual(parseArgs(args).options[args[1]], args[2])
   }
 })
 
-const plannedCommands = commands.filter((command) => command !== 'prepare')
+const plannedCommands = commands.filter((command) => command !== 'prepare' && command !== 'publish')
 
 test('planned commands exit 2 with a clear "not implemented yet" message', () => {
   const cases = [
-    ['publish', '--from', 'out'],
-    ['publish', '--from', 'out', '--repo', 'acme/app', '--private', '--expect', 'abc', '--resume'],
     ['describe'],
     ['describe', '--from', 'out', '--repo', 'acme/app', '--use-case', 'crm', '--summary', 's', '--when-to-use', 'w', '--when-not-to-use', 'n'],
   ]
@@ -97,7 +96,7 @@ test('planned commands exit 2 with a clear "not implemented yet" message', () =>
 })
 
 test('planned commands with --json print one envelope with rule usage', () => {
-  assert.deepEqual(plannedCommands, ['publish', 'describe'])
+  assert.deepEqual(plannedCommands, ['describe'])
   for (const command of plannedCommands) {
     const result = cli(command, '--json')
     assert.equal(result.status, 2)

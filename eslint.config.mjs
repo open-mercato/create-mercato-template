@@ -20,8 +20,8 @@ export default tseslint.config(
     rules: { '@typescript-eslint/no-require-imports': 'off' },
   },
   {
-    // test/release-e2e/ arrives with the release checks in Phase 2 Step 11.
-    files: ['test/release-e2e/**/*.{mts,mjs}', 'eslint.config.mjs'],
+    // test/release-e2e/gh-shim.mjs arrives in Step 9, the release checks in Step 11.
+    files: ['test/release-e2e/**/*.{mts,mjs}', 'test/helpers/**/*.mjs', 'eslint.config.mjs'],
     languageOptions: { globals: { process: 'readonly', console: 'readonly', fetch: 'readonly', AbortSignal: 'readonly', setTimeout: 'readonly', clearTimeout: 'readonly', URL: 'readonly', Response: 'readonly', Buffer: 'readonly' } },
   },
 )

@@ -191,8 +191,8 @@ test('a directory that is not a Git repository: exit 1, not-git-repo, only repor
   assert.deepEqual(fs.readdirSync(out), ['report.json'])
 })
 
-test('publish and describe still exit 2 "not implemented yet"', () => {
-  for (const command of ['publish', 'describe']) {
+test('describe still exits 2 "not implemented yet"', () => {
+  for (const command of ['describe']) {
     const result = cli([command, '--json'])
     assert.equal(result.status, 2)
     const value = JSON.parse(result.stdout)
