@@ -1,4 +1,5 @@
-import { redactMessage } from './common.js'
+import { redactMessage, redactValues } from './common.js'
+import { describe } from './describe.js'
 import { CliError, type ExitCode, type Failure, exitCodes } from './errors.js'
 import type { Finding } from './policy/entries.js'
 import * as fs from 'node:fs'
@@ -53,8 +54,7 @@ const versionFlags = ['--version', '-v']
 
 export const help = `Save an Open Mercato app as a clean GitHub template repository.
 
-Status: in development. prepare and publish work. describe is planned and
-not implemented yet: it checks its arguments, exits 2 and changes nothing.
+Status: in development. Nothing is published to npm yet.
 
   npx create-mercato-template prepare [<app>] --out <dir> [--include-uncommitted]
       [--allow-file <path>]... [--keep-env <KEY>]... [--json]
@@ -69,7 +69,8 @@ Commands:
              <dir>/tree (the files to publish) and <dir>/report.json
   publish    check <dir> against its report, then push exactly that snapshot
              as a one-commit GitHub template repository (needs gh, signed in)
-  describe   (planned) print the catalog entry (YAML) for the published template
+  describe   print the catalog entry (YAML) for the published template and the
+             link that says how to add it; reads <dir> only, no network
 
 prepare options:
   <app>                  the app directory, the top level of its Git repository
@@ -92,6 +93,20 @@ publish options:
                          required with --json or without a terminal
   --resume               continue a publication of this snapshot, on an empty
                          repository or one made from this snapshot
+
+describe options:
+  --from <dir>           required: a prepare output directory
+  --repo <owner/name>    the GitHub repository; needed when <dir>/publication.json
+                         is missing, and must match it when both are given
+  --use-case <value>     one of crm, commerce, b2b-portal, partner-portal,
+                         operations, field-service, internal-tools, starter
+  --summary <text>       plain text, 20 to 140 characters (default: the manifest
+                         description when it fits)
+  --when-to-use <text>   plain text, 40 to 240 characters, starting "Use when "
+  --when-not-to-use <text>
+                         plain text, at most 160 characters (optional)
+  A required value left out is printed as a comment, and the entry is marked
+  incomplete (exit 0).
 
 Options:
   -h, --help     show this help (plain text, even with --json)
@@ -300,13 +315,6 @@ function isOutcome(value: unknown): value is Outcome {
  */
 export type Dispatch = (command: Command, args: ParsedArgs) => Promise<Outcome | Record<string, unknown> | void>
 
-const notImplemented: Dispatch = async (command) => {
-  throw new CliError(
-    `${command} is not implemented yet. create-mercato-template is in development; nothing was read or changed. Follow progress at ${repositoryUrl}.`,
-    exitCodes.usage,
-  )
-}
-
 /** The envelope's `failures` entry for a finding: its fields without `level`. */
 function failureOf(finding: Finding): Failure {
   const failure: Failure = { ...finding }
@@ -431,9 +439,37 @@ export const runPublish: Dispatch = async (_command, args) => {
   })
 }
 
-/** The commands that are implemented; the others answer "not implemented yet". */
+function stringOption(value: true | string | string[] | undefined): string | undefined {
+  return typeof value === 'string' ? value : undefined
+}
+
+/**
+ * `describe`: every usage problem is exit 2 before `report.json` is read
+ * (it may stat `--from` and read `publication.json`); then `describe()`
+ * reads `<from>` and builds the entry. No network, no write.
+ */
+export const runDescribe: Dispatch = async (_command, args) => {
+  const from = stringOption(args.options['--from'])
+  if (from === undefined) throw usage('describe needs --from <dir>: a prepare output directory.')
+  const result = describe({
+    from,
+    repo: stringOption(args.options['--repo']),
+    useCase: stringOption(args.options['--use-case']),
+    summary: stringOption(args.options['--summary']),
+    whenToUse: stringOption(args.options['--when-to-use']),
+    whenNotToUse: stringOption(args.options['--when-not-to-use']),
+  })
+  return outcome({
+    exitCode: exitCodes.ok,
+    failures: [],
+    fields: { path: result.path, yaml: result.yaml, entry: result.entry, complete: result.complete, missing: result.missing, contributing: result.contributing },
+    text: result.text,
+  })
+}
+
+/** Dispatches the three commands. */
 const dispatchCommand: Dispatch = async (command, args) =>
-  command === 'prepare' ? runPrepare(command, args) : command === 'publish' ? runPublish(command, args) : notImplemented(command, args)
+  command === 'prepare' ? runPrepare(command, args) : command === 'publish' ? runPublish(command, args) : runDescribe(command, args)
 
 const defaultIo: Io = {
   stdout: (text) => process.stdout.write(text),
@@ -475,7 +511,13 @@ export async function main(
     if (parsed.error) throw new CliError(`${parsed.error} Run with --help for usage.`, exitCodes.usage)
     const command = parsed.command as Command
     const value = await dispatch(command, parsed)
-    const result = isOutcome(value) ? value : outcome({ exitCode: exitCodes.ok, failures: [], fields: value ?? {}, text: '' })
+    const returned = isOutcome(value) ? value : outcome({ exitCode: exitCodes.ok, failures: [], fields: value ?? {}, text: '' })
+    // A returned failure may name a path the user typed, which may hold an email address or a token.
+    const result = outcome({
+      ...returned,
+      failures: returned.failures.map((failure) => (typeof failure.message === 'string' ? { ...failure, message: redactValues(failure.message) } : failure)),
+      ...(returned.error === undefined ? {} : { error: redactValues(returned.error) }),
+    })
     if (parsed.json) io.stdout(`${JSON.stringify(envelope(command, result.exitCode, result.failures, result.fields), null, 2)}\n`)
     else {
       if (result.text !== '') io.stdout(result.text)
@@ -485,8 +527,9 @@ export async function main(
   } catch (error) {
     const known = error instanceof CliError && failureCodes.includes(error.exitCode)
     const exitCode: ExitCode = known ? error.exitCode : exitCodes.check
+    // Every message is redacted: a flag value or a path the user typed may hold an email address or a token.
     const failure: Failure = known
-      ? error.failure
+      ? { ...error.failure, ...(typeof error.failure.message === 'string' ? { message: redact(error.failure.message) } : {}) }
       : { rule: 'internal', message: redact(error instanceof Error ? error.message : String(error)) }
     if (parsed?.json)
       io.stdout(`${JSON.stringify(envelope(parsed.command, exitCode, [failure]), null, 2)}\n`)

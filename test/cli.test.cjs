@@ -48,7 +48,7 @@ test('--help and no arguments print usage that names every command', () => {
     assert.equal(result.status, 0, `exit code for ${JSON.stringify(args)}`)
     assert.equal(result.stderr, '')
     for (const command of commands) assert.match(result.stdout, new RegExp(`create-mercato-template ${command}`))
-    assert.match(result.stdout, /not implemented yet/)
+    assert.doesNotMatch(result.stdout, /not implemented yet|\(planned\)/)
     assert.match(result.stdout, /Exit codes: 0 done, 1 a check failed, 2 usage error/)
   }
 })
@@ -70,46 +70,37 @@ test('help wins over every usage error where a flag is expected', () => {
 test('--help and -h as the value of a flag do not print help', () => {
   // prepare --out --help is in test/prepare-cli.test.cjs: prepare runs now.
   // publish --from --help reads --help as the directory, then asks for --repo.
+  // describe --summary --help reads --help as the summary, then asks for --from.
   for (const args of [['describe', '--summary', '--help'], ['describe', '--summary', '-h'], ['publish', '--from', '--help']]) {
     const result = cli(...args)
     assert.equal(result.status, 2, JSON.stringify(args))
     assert.equal(result.stdout, '')
-    assert.match(result.stderr, args[0] === 'publish' ? /publish needs --repo/ : new RegExp(`${args[0]} is not implemented yet`))
+    assert.match(result.stderr, args[0] === 'publish' ? /publish needs --repo/ : /describe needs --from/)
     assert.deepEqual(parseArgs(args).options[args[1]], args[2])
   }
 })
 
-const plannedCommands = commands.filter((command) => command !== 'prepare' && command !== 'publish')
-
-test('planned commands exit 2 with a clear "not implemented yet" message', () => {
-  const cases = [
-    ['describe'],
-    ['describe', '--from', 'out', '--repo', 'acme/app', '--use-case', 'crm', '--summary', 's', '--when-to-use', 'w', '--when-not-to-use', 'n'],
-  ]
-  for (const args of cases) {
-    const result = cli(...args)
-    assert.equal(result.status, 2, `exit code for ${JSON.stringify(args)}`)
-    assert.equal(result.stdout, '')
-    assert.match(result.stderr, new RegExp(`${args[0]} is not implemented yet`))
-    assert.match(result.stderr, /nothing was read or changed/)
-  }
+test('every command is implemented: describe without --from is a usage error, not "not implemented yet"', () => {
+  const result = cli('describe')
+  assert.equal(result.status, 2)
+  assert.equal(result.stdout, '')
+  assert.match(result.stderr, /describe needs --from <dir>/)
+  assert.match(result.stderr, /Nothing was read or changed/)
+  assert.doesNotMatch(result.stderr, /not implemented yet/)
 })
 
-test('planned commands with --json print one envelope with rule usage', () => {
-  assert.deepEqual(plannedCommands, ['describe'])
-  for (const command of plannedCommands) {
-    const result = cli(command, '--json')
-    assert.equal(result.status, 2)
-    assert.equal(result.stderr, '')
-    const value = oneEnvelope(result.stdout)
-    assert.deepEqual(Object.keys(value).sort(), envelopeKeys)
-    assert.equal(value.command, command)
-    assert.equal(value.ok, false)
-    assert.equal(value.exitCode, 2)
-    assert.equal(value.failures.length, 1)
-    assert.equal(value.failures[0].rule, 'usage')
-    assert.match(value.failures[0].message, new RegExp(`${command} is not implemented yet`))
-  }
+test('describe --json without --from prints one envelope with rule usage', () => {
+  const result = cli('describe', '--json')
+  assert.equal(result.status, 2)
+  assert.equal(result.stderr, '')
+  const value = oneEnvelope(result.stdout)
+  assert.deepEqual(Object.keys(value).sort(), envelopeKeys)
+  assert.equal(value.command, 'describe')
+  assert.equal(value.ok, false)
+  assert.equal(value.exitCode, 2)
+  assert.equal(value.failures.length, 1)
+  assert.equal(value.failures[0].rule, 'usage')
+  assert.match(value.failures[0].message, /describe needs --from <dir>/)
 })
 
 const usageCases = [

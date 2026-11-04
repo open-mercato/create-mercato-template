@@ -134,10 +134,13 @@ export type Verified = {
   images: number
 }
 
-/** A `verify` refusal: exit 1, rule `snapshot-modified`. */
+/** What `publish` says after a `verify` refusal. */
+const publishNext = 'Nothing remote was read or changed. Run prepare again, review the new snapshot, then publish it.'
+
+/** A `verify` refusal: exit 1, rule `snapshot-modified`. `next` says what was not done and what to do. */
 export class SnapshotModified extends CliError {
-  constructor(reason: ModifiedReason, message: string, file?: string) {
-    super(`${message} Nothing remote was read or changed. Run prepare again, review the new snapshot, then publish it.`, exitCodes.check, {
+  constructor(reason: ModifiedReason, message: string, file?: string, next: string = publishNext) {
+    super(`${message} ${next}`, exitCodes.check, {
       rule: 'snapshot-modified',
       reason,
       ...(file === undefined ? {} : { path: file }),
@@ -159,7 +162,7 @@ function lstatOrNull(target: string): fs.Stats | null {
 }
 
 /** Opens one file without following a symlink and reads it once; null when it is not a regular file. */
-function readNoFollow(target: string): { content: Buffer; executable: boolean } | null {
+export function readNoFollow(target: string): { content: Buffer; executable: boolean } | null {
   let descriptor: number
   try {
     descriptor = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
@@ -176,11 +179,11 @@ function readNoFollow(target: string): { content: Buffer; executable: boolean } 
   }
 }
 
-type ReportFile = Pick<FileRecord, 'path' | 'mode' | 'size' | 'sha256'>
+export type ReportFile = Pick<FileRecord, 'path' | 'mode' | 'size' | 'sha256'>
 
 /** Reads `<from>/report.json` and checks its shape; any problem is `report-missing`. */
-function readReport(from: string): { snapshotId: string | null; files: ReportFile[]; errors: number } {
-  const missing = (detail: string) => new SnapshotModified('report-missing', `${path.join(from, 'report.json')} ${detail}.`, 'report.json')
+export function readReport(from: string, next: string = publishNext): { snapshotId: string | null; files: ReportFile[]; errors: number } {
+  const missing = (detail: string) => new SnapshotModified('report-missing', `${path.join(from, 'report.json')} ${detail}.`, 'report.json', next)
   const read = readNoFollow(path.join(from, 'report.json'))
   if (!read) throw missing('is missing or is not a regular file')
   let report: unknown

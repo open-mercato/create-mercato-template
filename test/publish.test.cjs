@@ -550,13 +550,6 @@ test('usage errors are exit 2 before any Git read or GitHub call', () => {
   assert.deepEqual(readLog(w, 'calls.log'), [])
 })
 
-test('describe still exits 2 "not implemented yet"', () => {
-  const w = world()
-  const result = cli(w, ['describe', '--json'])
-  assert.equal(result.status, 2)
-  assert.match(JSON.parse(result.stdout).failures[0].message, /describe is not implemented yet/)
-})
-
 test('the prompt (Q11): it gets counts from the verified tree; no means publish-declined and no remote call', async () => {
   const w = world()
   const snapshot = prepared({ 'public/logo.svg': '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n' })

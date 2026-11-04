@@ -12,6 +12,8 @@ const known = new Set([
   'required',
   'additionalProperties',
   'items',
+  'minItems',
+  'maxItems',
   'pattern',
   'minLength',
   'maxLength',
@@ -51,6 +53,10 @@ function validate(schema, value, pointer = '') {
   if (typeof value === 'number') {
     if (schema.minimum !== undefined && value < schema.minimum) problems.push(`${at}: below ${schema.minimum}`)
     if (schema.maximum !== undefined && value > schema.maximum) problems.push(`${at}: above ${schema.maximum}`)
+  }
+  if (Array.isArray(value)) {
+    if (schema.minItems !== undefined && value.length < schema.minItems) problems.push(`${at}: fewer than ${schema.minItems} items`)
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) problems.push(`${at}: more than ${schema.maxItems} items`)
   }
   if (Array.isArray(value) && schema.items) value.forEach((item, index) => problems.push(...validate(schema.items, item, `${pointer}/${index}`)))
   if (typeOf(value) === 'object') {

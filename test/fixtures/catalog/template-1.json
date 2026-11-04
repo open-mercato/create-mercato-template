@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://modules.openmercato.com/schema/template-1.json",
+  "$comment": "DRAFT. Not the published catalog file: the catalog has not published template-1.json yet (2026-11-04). Written from the catalog spec (open-mercato/modules docs/specs/2026-10-29-templates.md, section 'Catalog entry: templates/<owner>/<repo>.yml') and the primitives of its lib/schema/common.ts and lib/schema/descriptor.ts at 5a591d63c666e0d719bb9ee70d6f3ae644407d34. Replace with the published file before the first release (spec Step 12). See SOURCE.md.",
+  "type": "object",
+  "properties": {
+    "github": { "type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\\/[A-Za-z0-9._-]{1,100}$" },
+    "ref": { "type": "string", "minLength": 1, "maxLength": 250, "pattern": "^[A-Za-z0-9._/-]+$" },
+    "useCase": {
+      "enum": ["crm", "commerce", "b2b-portal", "partner-portal", "operations", "field-service", "internal-tools", "starter"]
+    },
+    "summary": { "type": "string", "minLength": 20, "maxLength": 140 },
+    "whenToUse": { "type": "string", "minLength": 1, "maxLength": 240, "pattern": "^Use when [\\s\\S]{31,}$" },
+    "whenNotToUse": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "links": {
+      "type": "object",
+      "properties": {
+        "docs": { "type": "string", "maxLength": 300, "pattern": "^https://" },
+        "support": { "type": "string", "maxLength": 300, "pattern": "^(?:https://|mailto:[^\\s]+$)" },
+        "demo": { "type": "string", "maxLength": 300, "pattern": "^https://" }
+      },
+      "additionalProperties": false
+    },
+    "screenshots": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "properties": {
+          "src": {
+            "type": "string",
+            "maxLength": 300,
+            "pattern": "^screenshots\\/[a-z0-9][a-z0-9_-]{0,63}\\.(?:webp|png|jpg)$|^(?!.*(?:\\.\\.|%2[eE]))https:\\/\\/raw\\.githubusercontent\\.com\\/([A-Za-z0-9-]{1,39})\\/([A-Za-z0-9._-]{1,100})\\/[A-Za-z0-9._~%/-]+$|^https:\\/\\/github\\.com\\/user-attachments\\/assets\\/[A-Za-z0-9-]+$"
+          },
+          "alt": { "type": "string", "minLength": 10, "maxLength": 120 }
+        },
+        "required": ["src", "alt"],
+        "additionalProperties": false
+      }
+    },
+    "pricing": { "enum": ["free"] },
+    "declares": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "array",
+          "maxItems": 30,
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,63}$" },
+              "description": { "type": "string", "minLength": 1, "maxLength": 240 },
+              "link": { "type": "string", "maxLength": 300, "pattern": "^https://" }
+            },
+            "required": ["name", "description"],
+            "additionalProperties": false
+          }
+        },
+        "hosts": {
+          "type": "array",
+          "maxItems": 30,
+          "items": { "type": "string", "maxLength": 253, "pattern": "^(\\*\\.)?([a-z0-9-]{1,63}\\.)+[a-z]{2,63}$" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "smoke": {
+      "type": "object",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "maxItems": 5,
+          "items": { "type": "string", "pattern": "^\\/(backend|api)\\/[a-zA-Z0-9/_\\-.]+$" }
+        },
+        "login": { "type": "boolean" },
+        "ready": { "type": "string", "maxLength": 200, "pattern": "^\\/[a-zA-Z0-9/_\\-.]*$" }
+      },
+      "additionalProperties": false
+    },
+    "slug": { "type": "string", "maxLength": 64, "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$" },
+    "status": { "enum": ["active", "hold", "unmaintained", "delisted"] },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "alternatives": {
+      "type": "array",
+      "maxItems": 5,
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\\/[A-Za-z0-9._-]{1,100}$" }
+    },
+    "supersededBy": { "type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\\/[A-Za-z0-9._-]{1,100}$" },
+    "featured": { "type": "boolean" }
+  },
+  "required": ["github", "useCase", "summary", "whenToUse"],
+  "additionalProperties": false
+}
