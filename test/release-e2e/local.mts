@@ -12,7 +12,7 @@ import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { randomBytes } from 'node:crypto'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -68,6 +68,9 @@ export function parseLocalOptions(args: string[], environment: NodeJS.ProcessEnv
     if (!database || !['postgres:', 'postgresql:'].includes(database.protocol) || !loopbackHosts.includes(database.hostname) || !database.port || database.pathname.length < 2)
       throw new Error('--database-url must be a throwaway Postgres on this machine, for example postgres://postgres:<password>@127.0.0.1:54329/open-mercato. The checks initialize it from scratch.')
   }
+  // In CI the full app run is part of the contract: never pass without it.
+  if (!database && environment.CI)
+    throw new Error('CI is set but no database was given: pass --database-url or RELEASE_E2E_DATABASE_URL, so the imported app is installed, started and signed in to.')
   return { databaseUrl: database?.href, createApp, results: path.resolve(values.results ?? fs.mkdtempSync(path.join(os.tmpdir(), 'mercato-template-release-'))) }
 }
 
@@ -97,6 +100,15 @@ export function redact(text: string, secrets: string[]): string {
   return sanitized
 }
 
+/** SIGTERM to the process group of `child` (spawned detached), then SIGKILL after 10 seconds. */
+export function stopGroup(child: ChildProcess): void {
+  if (!child.pid) return
+  try { process.kill(-child.pid, 'SIGTERM') } catch {}
+  const force = setTimeout(() => { try { process.kill(-child.pid!, 'SIGKILL') } catch {} }, 10000)
+  force.unref()
+  child.once('close', () => clearTimeout(force))
+}
+
 /**
  * The fake key written to the ignored `.env`. Assembled at run time, never a
  * literal in this repository, and random for each run, so a match in the
@@ -117,7 +129,7 @@ type ApiRequest = { method: string; path: string; authorization: boolean }
  * one top directory as GitHub's. Everything else is 404, and every request is
  * recorded.
  */
-export async function serveGitHubApi(root: string): Promise<{ url: string; requests: ApiRequest[]; close: () => Promise<void> }> {
+export async function serveGitHubApi(root: string, environment: NodeJS.ProcessEnv = process.env): Promise<{ url: string; requests: ApiRequest[]; close: () => Promise<void> }> {
   const requests: ApiRequest[] = []
   const port = await freePort()
   const server = http.createServer((request, response) => {
@@ -136,10 +148,10 @@ export async function serveGitHubApi(root: string): Promise<{ url: string; reque
     let ref = ''
     try { ref = decodeURIComponent(encodedRef) } catch {}
     if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(ref) || ref.includes('..')) return notFound()
-    const commit = spawnSync('git', ['--git-dir', bare, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { encoding: 'utf8' })
+    const commit = spawnSync('git', ['--git-dir', bare, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { encoding: 'utf8', env: environment })
     if (commit.status !== 0) return notFound()
     const sha = commit.stdout.trim()
-    const archive = spawnSync('git', ['--git-dir', bare, 'archive', '--format=tar.gz', `--prefix=${owner}-${repo}-${sha.slice(0, 7)}/`, sha], { maxBuffer: 512 * 1024 * 1024 })
+    const archive = spawnSync('git', ['--git-dir', bare, 'archive', '--format=tar.gz', `--prefix=${owner}-${repo}-${sha.slice(0, 7)}/`, sha], { maxBuffer: 512 * 1024 * 1024, env: environment })
     if (archive.status !== 0) { response.writeHead(500).end(); return }
     response.writeHead(200, { 'content-type': 'application/x-gzip', 'content-length': String(archive.stdout.length) }).end(archive.stdout)
   })
@@ -160,13 +172,37 @@ export async function serveGitHubApi(root: string): Promise<{ url: string; reque
  * ignored `OM_CREATE_APP_GITHUB_API_BASE_URL` would fail here instead of
  * reaching api.github.com.
  */
-export const fetchGuardSource = `const allowed = process.env.RELEASE_E2E_ALLOWED_ORIGIN
-const original = globalThis.fetch
+export const fetchGuardSource = `import http from 'node:http'
+import https from 'node:https'
+import { syncBuiltinESMExports } from 'node:module'
+const allowed = process.env.RELEASE_E2E_ALLOWED_ORIGIN
+const refuse = (origin) => new Error('release checks: refused a request to ' + origin + '; only the loopback GitHub API stand-in may be reached')
+const originalFetch = globalThis.fetch
 globalThis.fetch = async (input, init) => {
   const url = new URL(typeof input === 'string' || input instanceof URL ? String(input) : input.url)
-  if (!allowed || url.origin !== allowed) throw new Error('release checks: refused a request to ' + url.origin + '; only the loopback GitHub API stand-in may be reached')
-  return original(input, init)
+  if (!allowed || url.origin !== allowed) throw refuse(url.origin)
+  return originalFetch(input, init)
 }
+// http and https too, so a client other than fetch cannot reach another host either.
+function originOf(protocol, input) {
+  if (typeof input === 'string' || input instanceof URL) return new URL(String(input)).origin
+  const options = input ?? {}
+  const scheme = options.protocol ?? protocol
+  const host = options.hostname ?? String(options.host ?? 'localhost').replace(/:\\d+$/, '')
+  const port = options.port ?? (scheme === 'https:' ? 443 : 80)
+  return new URL(scheme + '//' + (host.includes(':') && !host.startsWith('[') ? '[' + host + ']' : host) + ':' + port).origin
+}
+for (const [module, protocol] of [[http, 'http:'], [https, 'https:']]) {
+  for (const name of ['request', 'get']) {
+    const original = module[name]
+    module[name] = function guarded(input, ...rest) {
+      const origin = originOf(protocol, input)
+      if (!allowed || origin !== allowed) throw refuse(origin)
+      return original.call(this, input, ...rest)
+    }
+  }
+}
+syncBuiltinESMExports()
 `
 
 /**
@@ -210,8 +246,8 @@ export function filesContaining(directory: string, needle: string): string[] {
 }
 
 /** True when any object of the Git repository at `gitDir` (every blob, tree and commit, reachable or not) contains `needle`. */
-export function repositoryContains(gitDir: string, needle: string): boolean {
-  const objects = spawnSync('git', ['--git-dir', gitDir, 'cat-file', '--batch-all-objects', '--batch', '--unordered'], { maxBuffer: 1024 * 1024 * 1024 })
+export function repositoryContains(gitDir: string, needle: string, environment: NodeJS.ProcessEnv = process.env): boolean {
+  const objects = spawnSync('git', ['--git-dir', gitDir, 'cat-file', '--batch-all-objects', '--batch', '--unordered'], { maxBuffer: 1024 * 1024 * 1024, env: environment })
   if (objects.status !== 0) throw new Error(`Cannot read the objects of ${gitDir}`)
   return objects.stdout.includes(Buffer.from(needle))
 }
@@ -322,6 +358,11 @@ export async function main(args: string[]): Promise<void> {
   for (const name of Object.keys(environment))
     if (/^(?:GH_|GITHUB_TOKEN$|GH_ENTERPRISE_TOKEN$|GITHUB_ENTERPRISE_TOKEN$|NODE_AUTH_TOKEN$|NPM_TOKEN$|npm_config_.*auth|NPM_CONFIG_.*AUTH|RELEASE_E2E_DATABASE_URL$|OM_CREATE_APP_GITHUB_API_BASE_URL$)/i.test(name)) delete environment[name]
 
+  // Process groups still running, stopped on Ctrl+C.
+  const running = new Set<ChildProcess>()
+  const onInterrupt = () => { for (const child of running) stopGroup(child); process.exit(130) }
+  process.once('SIGINT', onInterrupt)
+
   const stages: { stage: string; status: string; durationMs: number }[] = []
   const writeResults = (extra: Record<string, unknown> = {}) =>
     fs.writeFileSync(path.join(options.results, 'local-results.json'), JSON.stringify({ createdAt: new Date().toISOString(), createApp: options.createApp, repository, stages, ...extra }, null, 2) + '\n')
@@ -331,10 +372,13 @@ export async function main(args: string[]): Promise<void> {
     process.stdout.write(`\n🧪 local: ${stage}\n`)
     const logfile = path.join(options.results, `local-${stage.replace(/[^a-z0-9-]/gi, '-')}.log`)
     return await new Promise((resolve, reject) => {
-      const child = spawn(executable, commandArgs, { cwd, env: { ...environment, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] })
+      // Its own process group, so a timeout or Ctrl+C stops the grandchildren (Next, tsc) too.
+      const child = spawn(executable, commandArgs, { cwd, env: { ...environment, ...extra }, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
+      running.add(child)
+      child.once('close', () => running.delete(child))
       let output = ''
       let stdout = ''
-      const timeout = setTimeout(() => { child.kill('SIGTERM') }, 20 * 60 * 1000)
+      const timeout = setTimeout(() => { stopGroup(child) }, 20 * 60 * 1000)
       child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); stdout += chunk.toString() })
       child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString() })
       child.on('error', (error) => { clearTimeout(timeout); reject(error) })
@@ -357,7 +401,9 @@ export async function main(args: string[]): Promise<void> {
   }
   const tool = async (stage: string, toolArgs: string[], cwd: string): Promise<Envelope> => {
     const result = await command(stage, process.execPath, [toolBin, ...toolArgs], cwd, {}, [0, 1, 2, 3, 4])
-    const envelope = JSON.parse(result.stdout) as Envelope
+    let envelope: Envelope
+    try { envelope = JSON.parse(result.stdout) as Envelope }
+    catch { throw new Error(`${toolArgs[0]} did not print one JSON envelope (exit ${result.code}): ${redact(result.stdout.slice(-2000), secrets)}`) }
     assert.equal(result.code, 0, `${toolArgs[0]} must succeed: ${redact(JSON.stringify(envelope.failures), secrets)}`)
     assert.equal(envelope.ok, true)
     return envelope
@@ -422,17 +468,22 @@ export async function main(args: string[]): Promise<void> {
 
     // 3. The fake key from the ignored .env appears nowhere in the published repository, or in what the tool wrote.
     check('fake-key-not-published', () => {
-      assert.equal(repositoryContains(bare, fakeKey), false, 'The fake key must not be in any object of the published repository')
+      // Positive control: the search finds the key where it is.
+      assert.deepEqual(filesContaining(sourceApp, fakeKey), ['.env'], 'The fake key must be found in the source app\'s .env')
+      assert.equal(repositoryContains(bare, fakeKey, environment), false, 'The fake key must not be in any object of the published repository')
       assert.deepEqual(filesContaining(out, fakeKey), [], 'The fake key must not be in the prepare output')
       assert.deepEqual(filesContaining(githubRoot, fakeKey), [], 'The fake key must not be in the shim root')
     })
 
     // 4. Import: create-mercato-app --app-url, reading the shim's repository through the loopback API only.
-    api = await serveGitHubApi(githubRoot)
+    api = await serveGitHubApi(githubRoot, environment)
+    const deadProxy = `http://127.0.0.1:${await freePort()}`
     await command('import-app', process.execPath, [createAppBin, 'imported-app', '--app-url', `https://github.com/${repository}/tree/${commitSha}`, '--no-init-git'], options.results, {
       OM_CREATE_APP_GITHUB_API_BASE_URL: api.url,
       RELEASE_E2E_ALLOWED_ORIGIN: api.url,
       NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${pathToFileURL(guard).href}`.trim(),
+      // Belt and braces: a client that honors proxy settings goes to a closed loopback port.
+      HTTP_PROXY: deadProxy, HTTPS_PROXY: deadProxy, http_proxy: deadProxy, https_proxy: deadProxy, NO_PROXY: '127.0.0.1', no_proxy: '127.0.0.1', NODE_USE_ENV_PROXY: '1',
     })
     const importedApp = path.join(options.results, 'imported-app')
     check('import-read-loopback-api', () => {
@@ -449,6 +500,7 @@ export async function main(args: string[]): Promise<void> {
       const text = fs.readFileSync(path.join(importedApp, '.env.example'), 'utf8')
       const manifest = JSON.parse(fs.readFileSync(path.join(importedApp, 'package.json'), 'utf8')) as { dependencies?: Record<string, string> }
       const core = manifest.dependencies?.['@open-mercato/core'] ?? null
+      if (!core || !/^\d+\.\d+\.\d+$/.test(core)) process.stdout.write('ℹ️ @open-mercato/core is not pinned to one version: values are checked against every known stock version.\n')
       assert.deepEqual(nonStockValues(text, core && /^\d+\.\d+\.\d+$/.test(core) ? core : null), [], 'The imported .env.example may hold only stock values')
       assert.match(text, new RegExp(`^${declaredKey}=$`, 'm'), `${declaredKey} must be declared with an empty value`)
     })
@@ -464,6 +516,7 @@ export async function main(args: string[]): Promise<void> {
       process.stdout.write('\nℹ️ Full app run skipped: pass --database-url (a throwaway Postgres on this machine) to install, initialize, build, start and sign in.\n')
     } else {
       fs.copyFileSync(path.join(importedApp, '.env.example'), path.join(importedApp, '.env'))
+      // freePort closes the port before yarn start binds it; a collision on a busy machine fails the run, never passes it.
       const port = await freePort()
       const baseUrl = `http://127.0.0.1:${port}`
       const appEnvironment: NodeJS.ProcessEnv = {
@@ -485,6 +538,7 @@ export async function main(args: string[]): Promise<void> {
     throw error
   } finally {
     await api?.close()
+    process.off('SIGINT', onInterrupt)
   }
 
   // Starts the built app and signs in as the seeded admin; the @app module answers the signed-in user only.
@@ -493,10 +547,11 @@ export async function main(args: string[]): Promise<void> {
     process.stdout.write('\n🌐 local: start the imported app and sign in\n')
     let output = ''
     const child = spawn(yarn, ['start'], { cwd: app, env: { ...environment, ...appEnvironment }, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
+    running.add(child)
     let exited = false
     child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString() })
     child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString() })
-    child.on('close', () => { exited = true })
+    child.on('close', () => { exited = true; running.delete(child) })
     try {
       let ready = false
       while (!ready && Date.now() - started < 5 * 60 * 1000) {
@@ -519,12 +574,11 @@ export async function main(args: string[]): Promise<void> {
       stages.push({ stage: 'imported-start-sign-in', status: 'failed', durationMs: Date.now() - started })
       throw error
     } finally {
-      if (child.pid && child.exitCode === null) {
+      // `exited`, not `exitCode`: a process killed by a signal keeps exitCode null after close.
+      if (!exited) {
         const closed = new Promise<void>((resolve) => child.once('close', () => resolve()))
-        try { process.kill(-child.pid, 'SIGTERM') } catch {}
-        const force = setTimeout(() => { try { process.kill(-child.pid!, 'SIGKILL') } catch {} }, 10000)
+        stopGroup(child)
         await closed
-        clearTimeout(force)
       }
       fs.writeFileSync(path.join(options.results, 'local-imported-server.log'), redact(output, secrets))
     }
@@ -532,5 +586,11 @@ export async function main(args: string[]): Promise<void> {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main(process.argv.slice(2)).catch((error: unknown) => { process.stderr.write(`\n❌ ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1 })
+  // Failure unless main() settles successfully: if the event loop ever drains
+  // with main() still pending, the run must not exit 0.
+  process.exitCode = 1
+  main(process.argv.slice(2)).then(
+    () => { process.exitCode = 0 },
+    (error: unknown) => { process.stderr.write(`\n❌ ${error instanceof Error ? error.message : String(error)}\n`); process.exitCode = 1 },
+  )
 }

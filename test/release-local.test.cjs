@@ -66,6 +66,9 @@ test('options: the database must be a Postgres on this machine, the scaffold a c
   for (const url of ['postgres://u:p@db.example.com:5432/db', 'postgres://u:p@10.0.0.5:5432/db', 'mysql://u:p@127.0.0.1:3306/db', 'postgres://u:p@127.0.0.1/db', 'postgres://u:p@127.0.0.1:5432/', 'not a url'])
     assert.throws(() => local.parseLocalOptions(['--database-url', url], {}), /--database-url must be a throwaway Postgres on this machine/, url)
   assert.throws(() => local.parseLocalOptions([], { RELEASE_E2E_DATABASE_URL: 'postgres://u:p@db.example.com:5432/db' }), /throwaway Postgres/)
+  // In CI the full app run is required: no database is an error, not a skip.
+  assert.throws(() => local.parseLocalOptions([], { CI: 'true' }), /CI is set but no database was given/)
+  assert.equal(new URL(local.parseLocalOptions([], { CI: 'true', RELEASE_E2E_DATABASE_URL: 'postgres://u:p@127.0.0.1:5432/db' }).databaseUrl).port, '5432')
   for (const spec of ['create-mercato-module@1.0.0', 'create-mercato-app', 'create-mercato-app@0.9.0 --evil', 'evil@latest'])
     assert.throws(() => local.parseLocalOptions(['--create-app', spec], {}), /--create-app must be/, spec)
   for (const args of [['--registry', 'x'], ['--results'], ['--results', '--create-app'], ['results', 'x'], ['--results', 'a', '--results', 'b']])
@@ -124,9 +127,22 @@ test('the fetch guard of the import refuses every origin but the stand-in, befor
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const allowed = `http://127.0.0.1:${server.address().port}`
   const script = `
+    import http from 'node:http'
+    import https from 'node:https'
+    import { get as httpsGet } from 'node:https'
     const results = []
     for (const target of process.argv.slice(1)) {
       try { const response = await fetch(target); results.push(await response.text()) } catch (error) { results.push('refused: ' + error.message) }
+    }
+    // The other clients: a direct http/https call to GitHub, by URL, by options, and through a named ESM import.
+    const direct = [
+      () => https.get('https://api.github.com/repos/acme/saved'),
+      () => https.request({ hostname: 'api.github.com', path: '/repos/acme/saved' }),
+      () => http.get({ host: 'codeload.github.com', port: 80, path: '/' }),
+      () => httpsGet(new URL('https://github.com/acme/saved')),
+    ]
+    for (const call of direct) {
+      try { const request = call(); request.destroy(); results.push('sent') } catch (error) { results.push('refused: ' + error.message) }
     }
     console.log(JSON.stringify(results))
   `
@@ -142,7 +158,9 @@ test('the fetch guard of the import refuses every origin but the stand-in, befor
   try {
     const guarded = await run({ RELEASE_E2E_ALLOWED_ORIGIN: allowed })
     assert.equal(guarded.status, 0)
-    const [stand, github, other, alias] = JSON.parse(guarded.stdout)
+    const [stand, github, other, alias, ...direct] = JSON.parse(guarded.stdout)
+    assert.equal(direct.length, 4)
+    for (const result of direct) assert.match(result, /^refused: release checks: refused a request to https?:\/\/[a-z.]*github\.com/)
     assert.equal(stand, 'stand-in')
     assert.match(github, /^refused: release checks: refused a request to https:\/\/api\.github\.com/)
     assert.match(other, /^refused: release checks: refused/)
@@ -153,6 +171,20 @@ test('the fetch guard of the import refuses every origin but the stand-in, befor
   } finally {
     await new Promise((resolve) => server.close(resolve))
   }
+})
+
+test('stopGroup stops a detached process group, grandchildren included', async () => {
+  const { spawn } = require('node:child_process')
+  // A shell that starts a long-lived grandchild and waits for it.
+  const child = spawn('sh', ['-c', 'sleep 300 & echo $!; wait'], { detached: true, stdio: ['ignore', 'pipe', 'ignore'] })
+  const grandchild = await new Promise((resolve) => child.stdout.once('data', (chunk) => resolve(Number(String(chunk).trim()))))
+  const closed = new Promise((resolve) => child.once('close', resolve))
+  local.stopGroup(child)
+  await closed
+  // The orphaned grandchild is reaped by init shortly after the signal.
+  const alive = () => { try { process.kill(grandchild, 0); return true } catch { return false } }
+  for (let attempt = 0; attempt < 50 && alive(); attempt++) await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(alive(), false, 'the grandchild must be stopped with its group')
 })
 
 test('the author changes of the release checks give the @app module and the declared env in the manifest, and a stock-only .env.example', () => {
