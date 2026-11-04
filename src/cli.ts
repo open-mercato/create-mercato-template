@@ -1,4 +1,4 @@
-import { safeCommandOutput } from './common.js'
+import { redactMessage } from './common.js'
 import { CliError, type ExitCode, type Failure, exitCodes } from './errors.js'
 import type { Finding } from './policy/entries.js'
 import * as fs from 'node:fs'
@@ -85,7 +85,8 @@ prepare options:
 
 publish options:
   --from <dir>           required: a prepare output directory
-  --repo <owner/name>    required: the GitHub repository to create
+  --repo <owner/name>    required: the GitHub repository to publish to (created
+                         unless --resume finds it)
   --public, --private    required, exactly one: the repository visibility
   --expect <snapshotId>  publish only this snapshot, without the prompt;
                          required with --json or without a terminal
@@ -444,7 +445,7 @@ const defaultIo: Io = {
  * email addresses: no output field may carry one (spec, "--json shape").
  */
 export function redact(message: string): string {
-  return safeCommandOutput(message).replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g, '[EMAIL]')
+  return redactMessage(message)
 }
 
 const failureCodes: readonly number[] = [exitCodes.check, exitCodes.usage, exitCodes.githubAuth, exitCodes.githubStep]

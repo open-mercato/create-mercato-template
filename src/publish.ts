@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { type Executor, run, safeCommandOutput } from './common.js'
+import { type Executor, redactMessage, run } from './common.js'
 import { CliError, type ExitCode, type Failure, exitCodes } from './errors.js'
 import { checkGit, gitEnvironment } from './git.js'
 import { unsafePathReason } from './policy/entries.js'
@@ -251,10 +251,15 @@ function manifestDescription(files: readonly VerifiedFile[]): string | null {
 export function verify(from: string, expect?: string): Verified {
   const fromStat = lstatOrNull(from)
   if (!fromStat || fromStat.isSymbolicLink() || !fromStat.isDirectory())
-    throw new SnapshotModified('report-missing', `${from} is not a prepare output directory (missing, or a symlink).`, '.')
+    throw new SnapshotModified(
+      fromStat?.isSymbolicLink() ? 'file-changed' : 'report-missing',
+      `${from} is not a prepare output directory (missing, a symlink or a file).`,
+      '.',
+    )
   const report = readReport(from)
-  if (report.errors > 0 || report.snapshotId === null)
-    throw new SnapshotModified('report-errors', `report.json lists ${report.errors} error finding(s) and has no snapshotId: prepare refused this snapshot.`, 'report.json')
+  if (report.errors > 0)
+    throw new SnapshotModified('report-errors', `report.json lists ${report.errors} error finding(s): prepare refused this snapshot.`, 'report.json')
+  if (report.snapshotId === null) throw new SnapshotModified('report-errors', 'report.json has no snapshotId: prepare refused this snapshot.', 'report.json')
   if (computeSnapshotId(report.files) !== report.snapshotId)
     throw new SnapshotModified('file-changed', 'report.json was edited: its files no longer give its snapshotId.', 'report.json')
   if (expect !== undefined && expect !== report.snapshotId)
@@ -323,8 +328,8 @@ class Commands {
     return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' }
   }
 
-  gh(args: string[], cwd: string): Result {
-    return this.exec('gh', args, cwd, this.environment)
+  gh(args: string[], cwd: string, environment: NodeJS.ProcessEnv = this.environment): Result {
+    return this.exec('gh', args, cwd, environment)
   }
 
   gitEnvironment(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -341,7 +346,7 @@ class Commands {
   gitOk(args: string[], cwd: string, options: { input?: Buffer; extra?: NodeJS.ProcessEnv } = {}): string {
     const result = this.git(args, cwd, options)
     if (result.status !== 0)
-      throw new Error(`git ${args[0]} failed (exit ${result.status ?? 'signal'}): ${safeCommandOutput(result.stderr, this.environment).split('\n')[0] ?? ''}`)
+      throw new Error(`git ${args[0]} failed (exit ${result.status ?? 'signal'}): ${redactMessage(result.stderr, this.environment).split('\n')[0] ?? ''}`)
     return result.stdout
   }
 }
@@ -363,7 +368,7 @@ function refusal(rule: string, message: string): CliError {
 }
 
 function commandDetail(result: Result, environment: NodeJS.ProcessEnv): string {
-  const text = safeCommandOutput([result.stderr, result.stdout].filter((value) => value.trim()).join('\n'), environment)
+  const text = redactMessage([result.stderr, result.stdout].filter((value) => value.trim()).join('\n'), environment)
   return text === '' ? '' : `\n\n${text}`
 }
 
@@ -473,17 +478,19 @@ function buildCommit(
  */
 function push(commands: Commands, repo: string, workspace: string, buildRepo: string, local: CommitInfo): { commit: CommitInfo; pushed: boolean } {
   const clone = path.join(workspace, 'clone')
-  const cloned = commands.gh(['repo', 'clone', repo, clone, '--', '--no-checkout'], workspace)
+  const cloned = commands.gh(['repo', 'clone', repo, clone, '--', '--no-checkout'], workspace, commands.gitEnvironment())
   if (cloned.status !== 0 || !fs.existsSync(path.join(clone, '.git')))
     throw new StepFailed('push', `Cannot clone ${repo}. Its commit was built locally; retry with --resume.`, 'clone')
-  const remoteRefs = commands.gitOk(['for-each-ref', '--format=%(refname)', 'refs/remotes/origin'], clone)
+  // Every ref the clone got (branches and tags), except the symbolic origin/HEAD.
+  const remoteRefs = commands.gitOk(['for-each-ref', '--format=%(refname)', 'refs/remotes/origin', 'refs/tags'], clone)
     .split('\n')
     .filter((ref) => ref !== '' && ref !== 'refs/remotes/origin/HEAD')
   if (remoteRefs.length > 0) {
     const head = commands.git(['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/HEAD^{commit}'], clone)
     const count = head.status === 0 ? commands.git(['rev-list', '--count', 'refs/remotes/origin/HEAD'], clone).stdout.trim() : ''
     const tree = head.status === 0 ? commands.git(['rev-parse', '--verify', '--quiet', 'refs/remotes/origin/HEAD^{tree}'], clone).stdout.trim() : ''
-    if (head.status !== 0 || count !== '1' || tree !== local.tree)
+    // This snapshot's repository has one branch, one commit, the snapshot's tree.
+    if (head.status !== 0 || remoteRefs.length !== 1 || count !== '1' || tree !== local.tree)
       throw refusal(
         'repo-not-from-snapshot',
         `${repo} is neither empty nor this snapshot's one commit, so publish leaves it alone. Nothing was changed. Choose a new repository name.`,
@@ -563,14 +570,30 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
     if (snapshotId !== null) writePublication(from, { schema: 1, snapshotId, repo, commit, steps: steps.map((step) => ({ ...step })), at: now().toISOString() })
   }
   const finish = (exitCode: ExitCode, failures: Failure[]): PublishResult => {
-    const retry = exitCode === exitCodes.githubStep && snapshotId !== null ? retryCommand(version, from, fullName, options.visibility, snapshotId) : null
+    // A retry for a failed GitHub step, and for any other failure once the
+    // repository may have been changed (a publication.json write that failed).
+    const remoteChanged = steps.some((step) => step.status === 'done' && step.name !== 'verify')
+    const retry =
+      exitCode !== exitCodes.ok && snapshotId !== null && (exitCode === exitCodes.githubStep || remoteChanged)
+        ? retryCommand(version, from, fullName, options.visibility, snapshotId)
+        : null
     const result = { exitCode, failures, snapshotId, repo, commit, steps, retry }
     return { ...result, text: resultText(result) }
   }
   /** Marks `name` done, or skipped, and rewrites `publication.json`. */
-  const done = (name: StepName, status: StepStatus = 'done') => {
+  const done = (name: StepName, status: StepStatus = 'done', write = true) => {
     steps.push({ name, status })
-    record()
+    if (write) record()
+  }
+  /** Runs a GitHub read or change; a command that cannot run or times out fails `step` (exit 4). */
+  const remote = <T>(step: Exclude<StepName, 'verify'>, detail: string | undefined, action: () => T): T => {
+    try {
+      return action()
+    } catch (error) {
+      if (error instanceof CliError) throw error
+      const message = redactMessage(error instanceof Error ? error.message : String(error), environment)
+      throw new StepFailed(step, `The ${step} step failed: ${message} Retry with --resume.`, detail)
+    }
   }
 
   let current: StepName = 'verify'
@@ -612,30 +635,37 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
     if (auth.status !== 0) throw new CliError('gh is not signed in to GitHub. Run gh auth login, then retry. Nothing remote was changed.', exitCodes.githubAuth)
 
     // Step 3: repo state (reads only).
-    current = 'create'
-    const state = readRepoState(commands, fullName, from)
+    const state = remote('create', 'repo-read', () => readRepoState(commands, fullName, from))
     if (state.exists) {
-      repo = { ...repoInfo, visibility: state.visibility === 'internal' ? options.visibility : state.visibility }
+      if (state.visibility !== 'internal') repo = { ...repoInfo, visibility: state.visibility }
       if (!options.resume)
         throw refusal('repo-name-exists', `${fullName} already exists on GitHub. Nothing was changed. Choose a new name, or add --resume to continue a publication of this snapshot.`)
       if (state.visibility !== options.visibility)
-        throw refusal('visibility-mismatch', `${fullName} is ${state.visibility} on GitHub, not ${options.visibility}. Nothing was changed. Run again with --${state.visibility === 'internal' ? 'private' : state.visibility} or choose a new name.`)
+        throw refusal(
+          'visibility-mismatch',
+          state.visibility === 'internal'
+            ? `${fullName} is an internal repository on GitHub; publish makes public or private templates only. Nothing was changed. Choose a new name.`
+            : `${fullName} is ${state.visibility} on GitHub, not ${options.visibility}. Nothing was changed. Run again with --${state.visibility} or choose a new name.`,
+        )
     }
 
     // Step 4: the commit, built locally before any remote change.
-    const identity = commitIdentity(commands, from)
-    workspace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'create-mercato-template-')))
-    const buildRepo = path.join(workspace, 'build')
+    const identity = remote('create', 'user-read', () => commitIdentity(commands, from))
+    const work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'create-mercato-template-')))
+    workspace = work
+    const buildRepo = path.join(work, 'build')
     const local = buildCommit(commands, buildRepo, verified, identity, version)
     commit = local
 
-    // Step 5: create.
-    if (state.exists) done('create', 'skipped')
+    // Step 5: create. On a resume, publication.json is written only once the
+    // push step has checked that the repository is this snapshot's.
+    current = 'create'
+    if (state.exists) done('create', 'skipped', false)
     else {
-      const created = commands.gh(
+      const created = remote('create', undefined, () => commands.gh(
         ['repo', 'create', fullName, `--${options.visibility}`, ...(verified.description ? ['--description', verified.description] : [])],
-        workspace,
-      )
+        work,
+      ))
       if (created.status !== 0)
         throw new StepFailed('create', `gh repo create ${fullName} failed. Nothing was pushed; retry with --resume.${commandDetail(created, environment)}`)
       repo = repoInfo
@@ -644,13 +674,13 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
 
     // Step 6: push.
     current = 'push'
-    const pushed = push(commands, fullName, workspace, buildRepo, local)
+    const pushed = remote('push', undefined, () => push(commands, fullName, work, buildRepo, local))
     commit = pushed.commit
     done('push', pushed.pushed ? 'done' : 'skipped')
 
     // Step 7: template-flag.
     current = 'template-flag'
-    const flagged = commands.gh(['api', '--method', 'PATCH', `repos/${fullName}`, '-F', 'is_template=true'], workspace)
+    const flagged = remote('template-flag', undefined, () => commands.gh(['api', '--method', 'PATCH', `repos/${fullName}`, '-F', 'is_template=true'], work))
     let isTemplate = false
     if (flagged.status === 0) {
       try {
@@ -662,7 +692,7 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
 
     // Step 8: topics.
     current = 'topics'
-    const topics = commands.gh(['repo', 'edit', fullName, ...templateTopics.flatMap((topic) => ['--add-topic', topic])], workspace)
+    const topics = remote('topics', undefined, () => commands.gh(['repo', 'edit', fullName, ...templateTopics.flatMap((topic) => ['--add-topic', topic])], work))
     if (topics.status !== 0) throw new StepFailed('topics', `Adding the topics to ${fullName} failed. Retry with --resume.${commandDetail(topics, environment)}`)
     done('topics')
     return finish(exitCodes.ok, [])
@@ -671,7 +701,7 @@ export async function publish(options: PublishOptions): Promise<PublishResult> {
     // Once a repository may have been changed, an unexpected failure is the
     // failure of the step that ran, so the run can be resumed (exit 4).
     if (!(error instanceof CliError) && steps.some((step) => step.name === 'create')) {
-      const message = safeCommandOutput(error instanceof Error ? error.message : String(error), environment)
+      const message = redactMessage(error instanceof Error ? error.message : String(error), environment)
       error = new StepFailed(current as Exclude<StepName, 'verify'>, `The ${current} step failed: ${message} Retry with --resume.`)
     }
     if (!(error instanceof CliError)) throw error

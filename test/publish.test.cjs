@@ -410,6 +410,77 @@ test('an unrelated repository with --resume: exit 1, repo-not-from-snapshot, no 
   assert.deepEqual(stepList(value), ['verify:done', 'create:skipped'])
   assert.deepEqual(readLog(w, 'mutations.log'), [])
   assert.equal(git(w, w.bare('acme/unrelated'), ['rev-parse', 'main']), before)
+  // publication.json never names a repository that is not this snapshot's.
+  const publication = JSON.parse(fs.readFileSync(path.join(snapshot.out, 'publication.json'), 'utf8'))
+  assert.equal(publication.repo, null)
+  assert.equal(publication.commit, null)
+  assert.deepEqual(publication.steps, [{ name: 'verify', status: 'done' }])
+})
+
+test('--resume on a repository with only a tag, or with this snapshot plus another branch: repo-not-from-snapshot', () => {
+  const w = world()
+  const snapshot = prepared()
+  shimCreate(w, 'acme/tagged')
+  const other = createFixtureRepo({ 'other.txt': 'tag only\n' })
+  assert.equal(sh('git', ['-C', other, 'push', '-q', w.bare('acme/tagged'), 'HEAD:refs/tags/v1'], { env: w.env }).status, 0)
+  const tagged = publishJson(w, snapshot, 'acme/tagged', ['--resume'])
+  assert.equal(tagged.status, 1)
+  assert.equal(tagged.value.failures[0].rule, 'repo-not-from-snapshot')
+  assert.equal(git(w, w.bare('acme/tagged'), ['for-each-ref', '--format=%(refname)']), 'refs/tags/v1')
+
+  const published = publishJson(w, snapshot, 'acme/branches')
+  assert.equal(published.status, 0)
+  assert.equal(sh('git', ['-C', other, 'push', '-q', w.bare('acme/branches'), 'HEAD:refs/heads/extra'], { env: w.env }).status, 0)
+  clearLogs(w)
+  const extra = publishJson(w, snapshot, 'acme/branches', ['--resume'])
+  assert.equal(extra.status, 1)
+  assert.equal(extra.value.failures[0].rule, 'repo-not-from-snapshot')
+  assert.deepEqual(readLog(w, 'mutations.log'), [])
+})
+
+test('a token or an email address in gh output never reaches the envelope', () => {
+  const w = world()
+  const snapshot = prepared()
+  const { status, value } = publishJson(w, snapshot, 'acme/leaky', [], { GH_WRAPPER_FAIL_ONCE: 'repo create', GH_WRAPPER_LEAK: '1' })
+  assert.equal(status, 4)
+  const message = value.failures[0].message
+  assert.match(message, /\[REDACTED\]/)
+  assert.match(message, /\[EMAIL\]/)
+  assert.equal(message.includes(fakeToken), false)
+  assert.equal(message.includes(['jane.doe', 'corp-mail.net'].join('@')), false)
+})
+
+/** An executor that runs everything, but answers or throws for one gh command line. */
+function intercepting(prefix, answer) {
+  const { run } = require('../dist/common.js')
+  return (command, args, cwd, options) => (command === 'gh' && args.join(' ').startsWith(prefix) ? answer() : run(command, args, cwd, options))
+}
+
+test('a gh command that cannot run or times out fails its step: exit 4 with retry, never exit 1', async () => {
+  const w = world()
+  const snapshot = prepared()
+  const timeout = () => {
+    throw new Error('gh repo did not finish in time. Check network access and retry.')
+  }
+  const created = await publish({ from: snapshot.out, repo: 'acme/slow', visibility: 'public', expect: snapshot.snapshotId, environment: w.env, executor: intercepting('repo create', timeout) })
+  assert.equal(created.exitCode, 4)
+  assert.deepEqual(stepList(created), ['verify:done', 'create:failed'])
+  assert.match(created.retry, / --resume$/)
+  const read = await publish({ from: snapshot.out, repo: 'acme/slow', visibility: 'public', expect: snapshot.snapshotId, environment: w.env, executor: intercepting('api repos/acme/slow', timeout) })
+  assert.equal(read.exitCode, 4)
+  assert.deepEqual(stepList(read), ['verify:done', 'create:failed:repo-read'])
+  assert.deepEqual(readLog(w, 'mutations.log'), [])
+})
+
+test('an internal repository with --resume: visibility-mismatch, a new name suggested, repo not reported as public or private', async () => {
+  const w = world()
+  const snapshot = prepared()
+  const internal = () => ({ status: 0, stdout: JSON.stringify({ private: true, visibility: 'internal' }), stderr: '', pid: 0, output: [], signal: null })
+  const result = await publish({ from: snapshot.out, repo: 'acme/inside', visibility: 'private', expect: snapshot.snapshotId, resume: true, environment: w.env, executor: intercepting('api repos/acme/inside', internal) })
+  assert.equal(result.exitCode, 1)
+  assert.equal(result.failures[0].rule, 'visibility-mismatch')
+  assert.match(result.failures[0].message, /internal repository .* Choose a new name/)
+  assert.equal(result.repo, null)
 })
 
 test('a visibility mismatch: exit 1, visibility-mismatch, no mutating call', () => {
