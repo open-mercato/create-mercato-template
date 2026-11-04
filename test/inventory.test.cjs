@@ -473,22 +473,32 @@ test('resolveImport: relative imports only, inside the snapshot', () => {
   assert.equal(resolveImport(contents, '@acme/x'), null)
 })
 
-test('contract: the catalog modulesFromModulesTs fixtures, when they exist', (context) => {
-  // Catalog Phase 1a step 4 will publish fixtures (a src/modules.ts and the
-  // expected entries). Until they are vendored here, this test is skipped.
+test('contract: the catalog modulesFromModulesTs fixtures', () => {
+  // Catalog Phase 1a step 4 (see test/fixtures/catalog/SOURCE.md): <name>.ts
+  // is src/modules.ts, the files of the optional <name>/ are other files of
+  // src/, and <name>.json is the catalog parser's {entries, unparsed}.
   const directory = path.join(fixtures, 'catalog', 'modules-from-modules-ts')
-  if (!fs.existsSync(directory)) {
-    context.skip('the catalog has not published its modulesFromModulesTs fixtures yet')
-    return
-  }
-  for (const name of fs.readdirSync(directory).filter((item) => item.endsWith('.ts'))) {
+  const names = fs.readdirSync(directory).filter((item) => item.endsWith('.ts'))
+  assert.equal(names.length, 8)
+  for (const name of names) {
     const expected = JSON.parse(fs.readFileSync(path.join(directory, name.replace(/\.ts$/, '.json')), 'utf8'))
-    const inventory = inventoryOf({ 'src/modules.ts': fs.readFileSync(path.join(directory, name), 'utf8') })
-    assert.deepEqual(
-      inventory.entries.map(({ id, from, when }) => (when === undefined ? { id, from } : { id, from, when })),
-      expected.entries,
-      name,
-    )
+    const files = { 'src/modules.ts': fs.readFileSync(path.join(directory, name)) }
+    const extra = path.join(directory, name.replace(/\.ts$/, ''))
+    if (fs.existsSync(extra)) for (const file of fs.readdirSync(extra)) files[`src/${file}`] = fs.readFileSync(path.join(extra, file))
+    const inventory = inventoryOf(files)
+    const entries = inventory.entries.map(({ id, from, when }) => (when === undefined ? { id, from } : { id, from, when }))
+    assert.deepEqual({ entries, unparsed: inventory.unparsed }, expected, name)
+  }
+})
+
+test('the vendored catalog fixtures copied from the scaffold are the bytes their SOURCE.md records', () => {
+  const directory = path.join(fixtures, 'catalog', 'modules-from-modules-ts')
+  const source = fs.readFileSync(path.join(directory, 'SOURCE.md'), 'utf8')
+  const rows = [...source.matchAll(/^\| `([^`]+)` +\| [^|]+\| `([0-9a-f]{40})` \| [^|]+\| `([0-9a-f]{64})` \|$/gm)]
+  assert.equal(rows.length, 4)
+  for (const [, file, , sha256] of rows) {
+    const content = fs.readFileSync(path.join(directory, file))
+    assert.equal(crypto.createHash('sha256').update(content).digest('hex'), sha256, file)
   }
 })
 

@@ -1,0 +1,29 @@
+{
+  "entries": [
+    {
+      "id": "first",
+      "from": "@app"
+    },
+    {
+      "id": "dashboards",
+      "from": "@open-mercato/core"
+    },
+    {
+      "id": "auth",
+      "from": "@open-mercato/core"
+    },
+    {
+      "id": "shared_one",
+      "from": "@acme/shared"
+    },
+    {
+      "id": "shared_two",
+      "from": "@acme/shared"
+    },
+    {
+      "id": "last",
+      "from": "@app"
+    }
+  ],
+  "unparsed": []
+}

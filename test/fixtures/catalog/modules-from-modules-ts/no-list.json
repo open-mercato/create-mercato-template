@@ -1,0 +1,9 @@
+{
+  "entries": [],
+  "unparsed": [
+    {
+      "line": 1,
+      "reason": "no exported array of {id, from} module entries"
+    }
+  ]
+}
