@@ -44,3 +44,4 @@ PR: #8
 
 - [x] 2.1 docs/guide.md, CHANGELOG.md and AGENTS.md : 61d5c58
 - [x] Post-review fix: dedupe order, scan of UTF-16 and Latin-1 opaque files, line spans, code-unit order : 0c9f555
+- [x] Re-review minors: line allowlist cache, UTF-16 without a byte order mark : 074582e
