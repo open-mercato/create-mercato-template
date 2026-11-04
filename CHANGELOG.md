@@ -4,8 +4,6 @@
 
 ## 0.1.0
 
-Release blocked (spec Step 12) until the catalog serves these files: `template-1.json` and `mercato-template-1.json`, the catalog schemas the tests use. Not published yet.
-
 First release. It needs Node.js 24 or newer and Git 2.40 or newer; `publish` also needs the GitHub CLI `gh`, signed in. The app must be a Git repository with at least one commit.
 
 ### Commands

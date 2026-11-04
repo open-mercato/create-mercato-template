@@ -1,7 +1,8 @@
 // Spec Step 12: the release waits until the vendored catalog schemas are the
-// files the catalog serves. test/fixtures/catalog/SOURCE.md carries the
-// "Release blocked" line until then, AGENTS.md and CHANGELOG.md repeat it, and
-// `npm publish` runs scripts/release-gate.mts, which refuses while it is there.
+// files the catalog serves. test/fixtures/catalog/SOURCE.md carries a
+// "Release blocked" line while they are not, AGENTS.md and CHANGELOG.md repeat
+// it, and `npm publish` runs scripts/release-gate.mts, which refuses while it is
+// there. The gate was lifted on 2026-11-04.
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -52,7 +53,7 @@ test('SOURCE.md, AGENTS.md and CHANGELOG.md agree on the release gate', () => {
     .split('\n')
     .some((line) => line.startsWith(marker))
   for (const file of ['AGENTS.md', 'CHANGELOG.md']) assert.equal(read(file).includes(marker), blocked, file)
-  // The vendored schemas are not the published files yet (spec Step 12).
-  assert.equal(blocked, true)
-  assert.equal(runGate(root).status, 1)
+  // The vendored schemas are the files the catalog serves (2026-11-04), so the gate is lifted (spec Step 12).
+  assert.equal(blocked, false)
+  assert.equal(runGate(root).status, 0)
 })
