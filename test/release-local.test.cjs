@@ -219,6 +219,13 @@ test('the fake key search covers every object of the published repository and ev
   assert.deepEqual(local.filesContaining(dir, key), [path.join('a', 'report.json')])
 })
 
+test('hasEnabledModule finds a registered module id, not a prefix', () => {
+  assert.equal(local.hasEnabledModule("  { id: 'api_keys', from: '@open-mercato/core' },", 'api_keys'), true)
+  assert.equal(local.hasEnabledModule('{ id: "api_keys" }', 'api_keys'), true)
+  assert.equal(local.hasEnabledModule("{ id: 'api_keys_v2' }", 'api_keys'), false)
+  assert.throws(() => local.hasEnabledModule('', 'bad id'), /Invalid module id/)
+})
+
 test('redact removes URL credentials, prefixed tokens and the run secrets from logs', () => {
   const password = ['pg', 'pass', 'word', '42'].join('')
   const token = ['ghp', 'A'.repeat(36)].join('_')

@@ -228,6 +228,24 @@ export function pinYarn(app: string): void {
   fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`)
 }
 
+/** True when `src/modules.ts` registers the module `id`. Copied from create-mercato-module. */
+export function hasEnabledModule(source: string, id: string): boolean {
+  if (!/^[a-z][a-z0-9_]*$/.test(id)) throw new Error('Invalid module id.')
+  return new RegExp(`\\bid\\s*:\\s*['"]${id}['"]`).test(source)
+}
+
+/** True when the app's installed `@open-mercato/core` has the api_keys module. */
+function coreHasApiKeys(app: string): boolean {
+  try {
+    createRequire(path.join(app, 'package.json')).resolve('@open-mercato/core/modules/api_keys')
+    return true
+  } catch (error) {
+    const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined
+    if (code !== 'MODULE_NOT_FOUND' && code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED') throw error
+    return false
+  }
+}
+
 /** Adds the `@app` module and registers it in `src/modules.ts`, as an author would. */
 export function addAppModule(app: string): void {
   const route = path.join(app, 'src/modules', moduleId, 'api/status/route.ts')
@@ -271,7 +289,11 @@ export async function main(args: string[]): Promise<void> {
 
   const fakeKey = makeFakeKey()
   const adminPassword = randomBytes(18).toString('base64url')
-  const secrets = [fakeKey, adminPassword, ...(options.databaseUrl ? [decodeURIComponent(new URL(options.databaseUrl).password)] : [])]
+  // Production mode refuses the stock placeholder signing secrets, so the
+  // imported app gets new ones, as a user sets them in .env after the import.
+  const jwtSecret = randomBytes(32).toString('hex')
+  const authSecret = randomBytes(32).toString('hex')
+  const secrets = [fakeKey, adminPassword, jwtSecret, authSecret, ...(options.databaseUrl ? [decodeURIComponent(new URL(options.databaseUrl).password)] : [])]
 
   const githubRoot = path.join(options.results, 'github')
   const binaries = path.join(options.results, 'bin')
@@ -357,6 +379,11 @@ export async function main(args: string[]): Promise<void> {
     pinYarn(sourceApp)
     // The scaffold's yarn.lock is a stub: an author installs before saving, and prepare refuses an unresolved lockfile.
     await command('install-source-app', yarn, ['install'], sourceApp)
+    // `yarn initialize` of core 0.9.0 reads the api_keys entities, which the
+    // empty preset does not enable; enable it when the core has it, as the
+    // create-mercato-module checks do. An author change like the others.
+    if (coreHasApiKeys(sourceApp) && !hasEnabledModule(fs.readFileSync(path.join(sourceApp, 'src/modules.ts'), 'utf8'), 'api_keys'))
+      await command('enable-api-keys', yarn, ['mercato', 'module', 'enable', '@open-mercato/core', '--module', 'api_keys'], sourceApp)
     addAppModule(sourceApp)
     addDeclaredEnv(sourceApp)
     fs.writeFileSync(path.join(sourceApp, '.env'), `# Local secrets, never committed.\n${fakeKeyName}=${fakeKey}\n`)
@@ -441,6 +468,7 @@ export async function main(args: string[]): Promise<void> {
       const baseUrl = `http://127.0.0.1:${port}`
       const appEnvironment: NodeJS.ProcessEnv = {
         DATABASE_URL: options.databaseUrl, PORT: String(port), APP_URL: baseUrl, NEXT_PUBLIC_APP_URL: baseUrl, INTERNAL_APP_ORIGIN: baseUrl,
+        JWT_SECRET: jwtSecret, AUTH_SECRET: authSecret, NEXTAUTH_SECRET: authSecret,
         OM_INIT_ADMIN_PASSWORD: adminPassword, OM_INIT_EMPLOYEE_PASSWORD: adminPassword, AUTO_SPAWN_WORKERS: 'false', AUTO_SPAWN_SCHEDULER: 'false',
       }
       await command('imported-install', yarn, ['install'], importedApp, appEnvironment)
