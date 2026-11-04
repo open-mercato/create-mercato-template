@@ -72,10 +72,27 @@ export function isText(content: Buffer): boolean {
  * its extension, exported without a text scan. `opaque`: an archive or
  * database extension, or any other content that is not text.
  */
-export function classifyContent(filePath: string, content: Buffer): ContentKind {
+export function classifyContent(filePath: string, content: Buffer, text: boolean = isText(content)): ContentKind {
   const extension = extensionOf(filePath)
   if (archiveExtensions.includes(extension) || databaseExtensions.includes(extension)) return 'opaque'
-  if (isText(content)) return 'text'
+  if (text) return 'text'
   const signature = signatures[extension]
   return signature !== undefined && signature(content) ? 'media' : 'opaque'
+}
+
+/**
+ * The text the secret scan reads from a file that is not UTF-8 text, so an
+ * opaque file exported through `allowFiles` is still scanned when it holds
+ * text in another encoding: UTF-16 when it starts with a byte order mark,
+ * else Latin-1 when it has no NUL byte (a legacy 8-bit text file). Binary
+ * content gives null: only `allowFiles` exports it, and it is not scanned.
+ */
+export function decodeForScan(content: Buffer): string | null {
+  if (content.length >= 2 && content[0] === 0xff && content[1] === 0xfe) return content.subarray(2).toString('utf16le')
+  if (content.length >= 2 && content[0] === 0xfe && content[1] === 0xff) {
+    const swapped = Buffer.from(content.subarray(2, content.length - (content.length % 2)))
+    return swapped.swap16().toString('utf16le')
+  }
+  if (!content.includes(0)) return content.toString('latin1')
+  return null
 }

@@ -7,7 +7,7 @@ import { GitReader, checkGit, isDubiousOwnership, unsafeDirectoryError } from '.
 import { readInventory } from './inventory.js'
 import { type ReportModule, buildManifest, manifestPath, manifestRecord, resolveModules, serializeManifest } from './manifest.js'
 import type { Finding } from './policy/entries.js'
-import { classifyContent, isText } from './policy/opaque.js'
+import { classifyContent, decodeForScan, isText } from './policy/opaque.js'
 import { type OpenMercato, type RootResult, checkRoot } from './policy/root.js'
 import { scanPath, scanText } from './policy/secrets.js'
 import {
@@ -325,7 +325,8 @@ const allowFileUnusedMessage = (reason: string) => `--allow-file names a path th
  * The content checks of every exported file, the generated manifest
  * included (spec, Opaque files and Secret scan): path-only secret rules on
  * every file; the secret scan, credential URLs and Yarn auth on every text
- * file, whatever its extension; `opaque-file` for an opaque file whose exact
+ * file, whatever its extension, and on the UTF-16 or Latin-1 decode of an
+ * opaque file that holds text in another encoding; `opaque-file` for an opaque file whose exact
  * path is not in `allowFiles`; `allow-file-unused` for an `allowFiles` path
  * that is not in the snapshot or is not opaque.
  */
@@ -335,8 +336,12 @@ function checkContents(snapshot: Snapshot, allowFiles: readonly string[]): { fin
   for (const file of snapshot.files) {
     const content = snapshot.contents.get(file.path) as Buffer
     findings.push(...scanPath(file.path))
-    if (isText(content)) findings.push(...scanText(file.path, content.toString('utf8')))
-    if (classifyContent(file.path, content) !== 'opaque') continue
+    const text = isText(content)
+    const kind = classifyContent(file.path, content, text)
+    // Media (an image or font whose signature matches) is not scanned as text.
+    const scanned = text ? content.toString('utf8') : kind === 'opaque' ? decodeForScan(content) : null
+    if (scanned !== null) findings.push(...scanText(file.path, scanned))
+    if (kind !== 'opaque') continue
     opaque.add(file.path)
     if (!allowFiles.includes(file.path)) findings.push({ rule: 'opaque-file', level: 'error', path: file.path, message: opaqueMessage })
   }

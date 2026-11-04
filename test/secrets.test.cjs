@@ -13,7 +13,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { prepare } = require('../dist/prepare.js')
 const { scanText, scanSecrets, scanPath, scanCredentialUrls, scanYarnAuth, shannonEntropy } = require('../dist/policy/secrets.js')
-const { classifyContent, isText } = require('../dist/policy/opaque.js')
+const { classifyContent, decodeForScan, isText } = require('../dist/policy/opaque.js')
 const { bundledRules } = require('../dist/rules/gitleaks.js')
 const { extraRules } = require('../dist/rules/extra.js')
 const { stockTable } = require('../dist/stock.js')
@@ -169,15 +169,16 @@ test('a 0.8.0 stock compose URL in an app pinned to 0.9.0: no finding', () => {
   assert.equal(report.stock.version, '0.9.0')
   assert.deepEqual(report.findings, [])
   // A table where the URL exists only in 0.8.0: still stock, whatever the app's version.
+  const oldUrl = join('postgres://old', ':old-', 'pw@db/app')
   const table = {
     ...stockTable,
     versions: {
-      '0.8.0': { ...stockTable.versions['0.8.0'], credentialUrls: ['postgres://old:old-pw@db/app'] },
+      '0.8.0': { ...stockTable.versions['0.8.0'], credentialUrls: [oldUrl] },
       '0.9.0': { ...stockTable.versions['0.9.0'], credentialUrls: [] },
     },
   }
-  assert.deepEqual(scanCredentialUrls('compose.yml', 'url: postgres://old:old-pw@db/app\n', table), [])
-  assert.equal(scanCredentialUrls('compose.yml', 'url: postgres://old:new-pw@db/app\n', table).length, 1)
+  assert.deepEqual(scanCredentialUrls('compose.yml', `url: ${oldUrl}\n`, table), [])
+  assert.equal(scanCredentialUrls('compose.yml', `url: ${oldUrl.replace(':old-', ':new-')}\n`, table).length, 1)
 })
 
 test('a stock compose URL with only the database name changed: credential-url with the ${POSTGRES_PASSWORD} hint', () => {
@@ -195,7 +196,7 @@ test('a stock compose URL with only the database name changed: credential-url wi
 test('variable-only passwords are not credentials; a variable with a default is', () => {
   assert.deepEqual(scanCredentialUrls('a.yml', 'url: postgres://${U}:${P}@db/app\n'), [])
   assert.deepEqual(scanCredentialUrls('a.yml', 'url: postgres://$U:$P@db/app\n'), [])
-  const withDefault = scanCredentialUrls('a.yml', 'one: 1\nurl: postgres://${U}:${P:-hunter2}@db/app\n')
+  const withDefault = scanCredentialUrls('a.yml', join('one: 1\nurl: postgres://${U}:${P:-', 'hunter2', '}@db/app\n'))
   assert.deepEqual(
     withDefault.map((finding) => [finding.rule, finding.level, finding.path, finding.line]),
     [['credential-url', 'error', 'a.yml', 2]],
@@ -430,4 +431,51 @@ test('the extra rules: OpenAI without the marker, Stripe webhook secrets and the
   // A public example key that the gitleaks gcp-api-key allowlist names: allowed by the floor too.
   assert.deepEqual(ids(scanSecrets('a', `x = '${join('AI', 'zaSy', 'abcdefghijklmnopqrstuvwxyz', '1234567')}'\n`, extra)), [])
   assert.deepEqual(ids(scanSecrets('a', `x = '${join('sk-', 'proj-', 'short')}'\n`, extra)), [])
+})
+
+test('regression: a value that an extra rule and generic-api-key both match on one line gets a finding', () => {
+  const cases = [
+    `export const stripeWebhookSecret = "${join('wh', 'sec_', randomText('st7', 32))}"`,
+    `api_token = "${join('gh', 's_', randomText('gh4', 30))}"`,
+    `const npmToken = "${join('np', 'm_', randomText('np3', 30))}"`,
+    `slack_token = "${join('xo', 'xs-', randomText('sl10', 20))}"`,
+  ]
+  for (const line of cases) assert.equal(scanText('src/a.ts', `${line}\n`).length, 1, line.split('=')[0])
+  const { result } = run(createFixtureRepo({ 'src/stripe.ts': `${cases[0]}\n` }))
+  assert.equal(result.exitCode, 1)
+  assert.deepEqual(
+    result.failures.map((finding) => [finding.rule, finding.path, finding.line]),
+    [['secret', 'src/stripe.ts', 1]],
+  )
+})
+
+test('an allowed opaque file that holds Latin-1 or UTF-16 text is still scanned', () => {
+  const key = join('gh', 'p_', randomText('gh5', 36))
+  const latin1 = Buffer.from(`// Caf\u00e9\nexport const t = '${key}'\n`, 'latin1')
+  const utf16 = Buffer.concat([Buffer.of(0xff, 0xfe), Buffer.from(`$t = '${key}'\r\n`, 'utf16le')])
+  assert.equal(isText(latin1), false)
+  assert.equal(isText(utf16), false)
+  const { result, report } = run(createFixtureRepo({ 'src/legacy.ts': latin1, 'scripts/setup.ps1': utf16 }), {
+    allowFiles: ['src/legacy.ts', 'scripts/setup.ps1'],
+  })
+  assert.equal(result.exitCode, 1)
+  assert.deepEqual(
+    report.findings.map((finding) => [finding.rule, finding.path, finding.ruleId, finding.line]),
+    [
+      ['secret', 'scripts/setup.ps1', 'github-pat', 1],
+      ['secret', 'src/legacy.ts', 'github-pat', 2],
+    ],
+  )
+  assert.deepEqual(report.allowFiles, [
+    { path: 'src/legacy.ts', used: true },
+    { path: 'scripts/setup.ps1', used: true },
+  ])
+  assertNoValue(JSON.stringify(result), [key])
+})
+
+test('decodeForScan: UTF-16 with a byte order mark, Latin-1 without NUL bytes, nothing for binary', () => {
+  assert.equal(decodeForScan(Buffer.concat([Buffer.of(0xff, 0xfe), Buffer.from('hi', 'utf16le')])), 'hi')
+  assert.equal(decodeForScan(Buffer.concat([Buffer.of(0xfe, 0xff), Buffer.from('hi', 'utf16le').swap16()])), 'hi')
+  assert.equal(decodeForScan(Buffer.of(0x43, 0x61, 0x66, 0xe9)), 'Caf\u00e9')
+  assert.equal(decodeForScan(zipBytes), null)
 })

@@ -23,8 +23,10 @@
  *   must hold, else any one is enough;
  * - a `generic` finding is dropped when a non-generic rule found a secret on
  *   the same line that contains it.
- * An extra rule's finding is also dropped when a bundled rule found a secret
- * on the same line, so one value gives one finding.
+ * An extra rule's finding is dropped when a bundled finding that survived
+ * that filter is on the same line, so one value gives one finding and never
+ * none. Unlike gitleaks, no decoding pass runs (base64, hex and percent
+ * encoded text is not decoded and scanned again).
  */
 import * as path from 'node:path'
 import { extraRules } from '../rules/extra.js'
@@ -110,14 +112,15 @@ export function shannonEntropy(data: string): number {
   return entropy
 }
 
-/** 1-based line numbers by character offset. */
+/** Line lookups by character offset, from the line starts computed once. */
 class Lines {
   private starts: number[] | null = null
   private readonly text: string
   constructor(text: string) {
     this.text = text
   }
-  lineOf(offset: number): number {
+  /** The 0-based index of the line that holds `offset`. */
+  indexOf(offset: number): number {
     if (this.starts === null) {
       this.starts = [0]
       for (let index = this.text.indexOf('\n'); index !== -1; index = this.text.indexOf('\n', index + 1)) this.starts.push(index + 1)
@@ -129,8 +132,20 @@ class Lines {
       if (this.starts[middle] <= offset) low = middle
       else high = middle - 1
     }
-    return low + 1
+    return low
   }
+  /** The text of the lines from the one that holds `start` to the one that holds `end`, without the final newline. */
+  span(start: number, end: number): string {
+    const first = this.indexOf(start)
+    const last = this.indexOf(end)
+    const starts = this.starts as number[]
+    return this.text.slice(starts[first], last + 1 < starts.length ? starts[last + 1] - 1 : this.text.length)
+  }
+}
+
+/** Code-unit order, the same on every machine (no locale). */
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0
 }
 
 function allowed(rule: CompiledRule, filePath: string, secret: string, match: string, line: string): boolean {
@@ -178,32 +193,34 @@ function ruleHits(rule: CompiledRule, filePath: string, text: string, lower: str
     const { value: match, leading } = trimNewlines(found[0])
     if (match === '') continue
     const start = found.index + leading
-    const end = start + match.length
-    const lineStart = text.lastIndexOf('\n', start - 1) + 1
-    const newline = text.indexOf('\n', end)
-    const line = text.slice(lineStart, newline === -1 ? text.length : newline)
+    const line = lines.span(start, start + match.length)
     const secret = secretOf(rule, match)
     if (rule.entropy !== null && rule.entropy !== 0 && shannonEntropy(secret) <= rule.entropy) continue
     if (allowed(rule, filePath, secret, match, line)) continue
-    hits.push({ ruleId: rule.id, line: lines.lineOf(start), secret, extra: rule.extra })
+    hits.push({ ruleId: rule.id, line: lines.indexOf(start) + 1, secret, extra: rule.extra })
   }
   return hits
 }
 
 const isGeneric = (ruleId: string) => ruleId.toLowerCase().includes('generic')
 
-/** gitleaks `filter`, then the extra rule dedupe, then one finding per rule and line. */
+/**
+ * gitleaks `filter` on the bundled hits; then an extra hit is kept unless a
+ * bundled hit that survived the filter is on its line; then one finding per
+ * rule and line. The order matters: each step looks only at what the step
+ * before kept, so two drops can never cancel each other out.
+ */
 function dedupe(hits: Hit[]): Hit[] {
-  const kept = hits.filter((hit) => {
-    if (isGeneric(hit.ruleId)) {
-      const better = hits.some(
+  const bundled = hits.filter((hit) => !hit.extra)
+  const keptBundled = bundled.filter(
+    (hit) =>
+      !isGeneric(hit.ruleId) ||
+      !bundled.some(
         (other) => other.line === hit.line && other.ruleId !== hit.ruleId && !isGeneric(other.ruleId) && other.secret.includes(hit.secret),
-      )
-      if (better) return false
-    }
-    if (hit.extra) return !hits.some((other) => !other.extra && other.line === hit.line)
-    return true
-  })
+      ),
+  )
+  const bundledLines = new Set(keptBundled.map((hit) => hit.line))
+  const kept = [...keptBundled, ...hits.filter((hit) => hit.extra && !bundledLines.has(hit.line))]
   const seen = new Set<string>()
   return kept.filter((hit) => {
     const key = `${hit.ruleId}\n${hit.line}`
@@ -228,7 +245,7 @@ export function scanSecrets(filePath: string, text: string, rules?: SecretRules)
   const lines = new Lines(text)
   const hits = compiledRules(rules).flatMap((rule) => ruleHits(rule, filePath, text, lower, lines))
   return dedupe(hits)
-    .sort((left, right) => left.line - right.line || left.ruleId.localeCompare(right.ruleId))
+    .sort((left, right) => left.line - right.line || compareCodeUnits(left.ruleId, right.ruleId))
     .map((hit) => ({ rule: 'secret', level: 'error', path: filePath, line: hit.line, ruleId: hit.ruleId, message: secretMessage }))
 }
 
