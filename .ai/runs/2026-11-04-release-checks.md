@@ -43,3 +43,4 @@ PR: #14
 
 - [x] 2.1 docs/guide.md, README.md and SOURCE.md in test/release-e2e, CHANGELOG.md and AGENTS.md : 2527733
 - [x] Fix: api_keys enabled in the source app, signing secrets for production start : 905cda5
+- [x] Review fixes: exit code, process groups, CI needs a database, http/https guard, isolated Git config : 92344e7
