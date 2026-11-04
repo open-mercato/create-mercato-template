@@ -402,7 +402,7 @@ test('matcher: allowlists by regexTarget, stopwords, OR and AND with paths', () 
 })
 
 test('matcher: a generic finding inside a better one is dropped; an extra rule yields to a bundled one on its line', () => {
-  const text = 'api_key = "tok_abcd1234"\n'
+  const text = join('api', '_key = "tok_', 'abcd1234"\n')
   const specific = rule({ id: 'specific', regex: { source: 'tok_[a-z0-9]{8}', flags: '' } })
   const generic = rule({ id: 'generic-thing', regex: { source: 'key = "([a-z_0-9]+)"', flags: '' } })
   assert.deepEqual(ids(scanSecrets('a', text, only(specific, generic))), ['specific:1'])
@@ -427,5 +427,7 @@ test('the extra rules: OpenAI without the marker, Stripe webhook secrets and the
   for (const [ruleId, value] of cases) assert.deepEqual(ids(scanSecrets('a', `x = '${value}'\n`, extra)), [`${ruleId}:1`], ruleId)
   // The AWS documentation key of the stock .env.example ends in EXAMPLE: allowed, as in gitleaks.
   assert.deepEqual(ids(scanSecrets('a', `x = '${join('AK', 'IA', 'IOSFODNN7', 'EXAMPLE')}'\n`, extra)), [])
+  // A public example key that the gitleaks gcp-api-key allowlist names: allowed by the floor too.
+  assert.deepEqual(ids(scanSecrets('a', `x = '${join('AI', 'zaSy', 'abcdefghijklmnopqrstuvwxyz', '1234567')}'\n`, extra)), [])
   assert.deepEqual(ids(scanSecrets('a', `x = '${join('sk-', 'proj-', 'short')}'\n`, extra)), [])
 })
