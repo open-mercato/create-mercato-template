@@ -1,6 +1,6 @@
 # Usage and development guide
 
-> **Status: in development.** `--help`, `--version`, the argument checks, `prepare` and `publish` work today. `describe` is planned: it checks its arguments, then exits with code 2 and changes nothing. The design lives in the [Phase 2 spec](https://github.com/open-mercato/create-mercato-template/blob/main/.ai/specs/2026-10-30-create-mercato-template.md); where this guide and the spec differ, the spec wins until a command ships.
+> **Status: in development.** `--help`, `--version`, the argument checks and the three commands, `prepare`, `publish` and `describe`, work today. Nothing is published to npm yet. The design lives in the [Phase 2 spec](https://github.com/open-mercato/create-mercato-template/blob/main/.ai/specs/2026-10-30-create-mercato-template.md); where this guide and the spec differ, the spec wins until a command ships.
 
 ## Command reference
 
@@ -34,13 +34,13 @@ With `--json` after a command, stdout carries exactly one JSON object and nothin
   "ok": false,
   "exitCode": 2,
   "tool": { "name": "create-mercato-template", "version": "0.0.0" },
-  "failures": [{ "rule": "usage", "message": "describe is not implemented yet. ..." }]
+  "failures": [{ "rule": "usage", "message": "describe needs --from <dir>: a prepare output directory. ..." }]
 }
 ```
 
 - `command` is `prepare`, `publish` or `describe`, or `null` when the command line does not start with one (`--json` alone, an unknown command, `--json prepare`). The command always comes first.
 - `ok` is true exactly when `exitCode` is 0, and then `failures` is empty.
-- Each failure has a `rule`: `usage` (exit 2), `internal` (exit 1, an error the tool did not expect; its message is redacted like command output, email addresses included, and no stack trace is printed), the Git rules below, `io-error`, and for `prepare` every `error` finding of its report (see below). Each command adds its own fields: `prepare` adds `out`, `snapshotId` and `report`; `publish` adds `snapshotId`, `repo`, `commit`, `steps` and `retry` (see below). No field ever holds a secret, a matched string, an env value or an email address.
+- Each failure has a `rule`: `usage` (exit 2), `internal` (exit 1, an error the tool did not expect; its message is redacted like command output, email addresses included, and no stack trace is printed), the Git rules below, `io-error`, and for `prepare` every `error` finding of its report (see below). Each command adds its own fields: `prepare` adds `out`, `snapshotId` and `report`; `publish` adds `snapshotId`, `repo`, `commit`, `steps` and `retry`; `describe` adds `path`, `yaml`, `entry`, `complete`, `missing` and `contributing` (see below). No field ever holds a secret, a matched string, an env value or an email address.
 
 Without `--json`, an error prints one message on stderr and nothing on stdout.
 
@@ -134,9 +134,47 @@ npx create-mercato-template@<version> publish --from <dir> --repo <owner/name> -
 
 `--resume` creates a repository that is still missing, pushes to an empty one, and skips the push when the repository already holds this snapshot. The tool never force-pushes, deletes or rewrites a repository.
 
-### `describe --from <dir>` (planned)
+### `describe --from <dir>`
 
-Prints the catalog entry for the published template. Flags: `--repo <owner/name>`, `--use-case <value>`, `--summary <text>`, `--when-to-use <text>`, `--when-not-to-use <text>`, `--json`.
+Prints the catalog entry for the template, the file `templates/<owner>/<repo>.yml` of [Open Mercato Modules](https://github.com/open-mercato/modules), and the link that says how to add it. It reads `<dir>/report.json`, the manifest `<dir>/tree/mercato-template.json` and `<dir>/publication.json`, and nothing else: no network, no GitHub call, no other program, no write. The output goes to stdout only.
+
+```bash
+npx create-mercato-template describe --from ../my-template
+npx create-mercato-template describe --from ../my-template --use-case b2b-portal \
+  --when-to-use "Use when B2B customers need to request quotes and manage their own accounts." --json
+```
+
+| Flag | Meaning |
+|---|---|
+| `--from <dir>` | Required. A `prepare` output directory. Not a directory: exit 2. |
+| `--repo <owner/name>` | The GitHub repository. Needed when `<dir>/publication.json` is missing or names no repository (a `publish` that failed before `create`); exit 2 when neither gives one. Given with a `publication.json` that names another repository: exit 2. Names are compared without case. |
+| `--use-case <value>` | One of `crm`, `commerce`, `b2b-portal`, `partner-portal`, `operations`, `field-service`, `internal-tools`, `starter`. Anything else: exit 2. |
+| `--summary <text>` | Plain text of 20 to 140 characters. Without it, the manifest description is used when it is plain text of that length. |
+| `--when-to-use <text>` | Plain text of 40 to 240 characters that starts with `Use when `. |
+| `--when-not-to-use <text>` | Plain text of at most 160 characters. Optional; printed only when given. |
+| `--json` | One envelope on stdout. |
+
+Plain text means no links (`https://`, `www.`), markdown (`[`, `]`, `*` at the start of a word, `#` at the start), HTML (`<`, `>`), backticks, control characters (a new line included) or long dashes, the rule of the catalog's descriptors. A text flag that breaks it, has the wrong length, holds an email address or matches the secret scan is exit 2, and the message never repeats the value. A manifest text with the same problems is left out of the entry.
+
+The entry, in this order: `github` (lower case, as the file path), `useCase`, `summary`, `whenToUse`, `whenNotToUse` when given, `pricing: free`, and `declares.env` with the keys `prepare` declared in the manifest (name, description and link; never a value). Curator fields (`slug`, `status`, `reason`, `featured` and the like), `smoke` and `ref` are never printed. A required value that is missing (`useCase`, `summary`, `whenToUse`, or the description of a declared key) is printed as a YAML comment that says what to pass, the entry is marked incomplete and the command still exits 0. Without `--json` the output is valid YAML: a comment with the file path, the entry, then comments with what is missing and the [CONTRIBUTING link](https://github.com/open-mercato/modules/blob/main/CONTRIBUTING.md#templates). There is no `/submit` link before the catalog's Phase 1b.
+
+```yaml
+# templates/acme/b2b-portal.yml
+github: acme/b2b-portal
+useCase: b2b-portal
+summary: B2B self-service portal with quotes and customer accounts.
+whenToUse: Use when B2B customers need to request quotes and manage their own accounts.
+pricing: free
+declares:
+  env:
+    - name: OPENAI_API_KEY
+      description: Used by the AI assistant.
+      link: https://platform.openai.com/api-keys
+```
+
+With `--json` the envelope adds `path` (`templates/<owner>/<repo>.yml`), `yaml` (the file content), `entry` (the same data as an object), `complete`, `missing` (field names, for example `["useCase","whenToUse"]`) and `contributing` (the URL).
+
+`describe` refuses a snapshot the way `publish`'s `verify` does, for the files it reads: a missing or unreadable `report.json` (`reason: "report-missing"`), a report with an error finding or no `snapshotId` (`report-errors`), and a manifest missing from the report or the tree (`file-missing`) or different from the report (`file-changed`) are exit 1, rule `snapshot-modified`.
 
 ### Exit codes
 
@@ -144,7 +182,7 @@ Prints the catalog entry for the published template. Flags: `--repo <owner/name>
 |---|---|
 | 0 | Done. |
 | 1 | A check failed, the snapshot does not verify, or publication is refused. No remote change. Also a missing or too old `git` and unexpected errors (`internal`). One exception: `publish` failing to write `publication.json` (`io-error`) after a GitHub step; the envelope then keeps `retry`. |
-| 2 | Usage error. Today also: `describe` is not implemented yet. |
+| 2 | Usage error. |
 | 3 | GitHub auth missing (`gh` not installed or `gh auth status` fails). `publish` only. |
 | 4 | A GitHub step failed. The JSON says which steps finished. `publish` only. |
 

@@ -190,13 +190,3 @@ test('a directory that is not a Git repository: exit 1, not-git-repo, only repor
   assert.deepEqual(value.failures.map((failure) => [failure.rule, failure.path]), [['not-git-repo', '.']])
   assert.deepEqual(fs.readdirSync(out), ['report.json'])
 })
-
-test('describe still exits 2 "not implemented yet"', () => {
-  for (const command of ['describe']) {
-    const result = cli([command, '--json'])
-    assert.equal(result.status, 2)
-    const value = JSON.parse(result.stdout)
-    assert.equal(value.failures[0].rule, 'usage')
-    assert.match(value.failures[0].message, new RegExp(`${command} is not implemented yet`))
-  }
-})

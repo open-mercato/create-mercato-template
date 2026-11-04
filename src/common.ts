@@ -77,12 +77,15 @@ export function safeCommandOutput(output: string, environment?: NodeJS.ProcessEn
   return sanitized.length > 3000 ? `…\n${sanitized.slice(-3000)}` : sanitized
 }
 
+/** An email address, as `redactMessage` removes it. */
+export const emailPattern = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/
+
 /**
  * `safeCommandOutput`, and email addresses replaced with `[EMAIL]`: no
  * output field may carry one (spec, "--json shape").
  */
 export function redactMessage(message: string, environment?: NodeJS.ProcessEnv): string {
-  return safeCommandOutput(message, environment).replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g, '[EMAIL]')
+  return safeCommandOutput(message, environment).replace(new RegExp(emailPattern.source, 'g'), '[EMAIL]')
 }
 
 export type BytesResult = { status: number | null; stdout: Buffer; stderr: string }

@@ -12,7 +12,7 @@
   <a href="https://github.com/open-mercato/create-mercato-template/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-bc9aff" alt="MIT license" /></a>
 </p>
 
-> **Status: in development.** Nothing is published to npm yet. `prepare` and `publish` work today (run them from GitHub, see the [guide](docs/guide.md#try-the-github-version)); `describe` exits with code 2 and says it is not implemented yet. The commands below describe the planned behavior.
+> **Status: in development.** Nothing is published to npm yet. `prepare`, `publish` and `describe` work today (run them from GitHub, see the [guide](docs/guide.md#try-the-github-version)).
 
 ```bash
 npx create-mercato-template prepare --out ../my-template

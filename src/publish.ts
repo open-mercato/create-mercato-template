@@ -159,7 +159,7 @@ function lstatOrNull(target: string): fs.Stats | null {
 }
 
 /** Opens one file without following a symlink and reads it once; null when it is not a regular file. */
-function readNoFollow(target: string): { content: Buffer; executable: boolean } | null {
+export function readNoFollow(target: string): { content: Buffer; executable: boolean } | null {
   let descriptor: number
   try {
     descriptor = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK)
@@ -176,10 +176,10 @@ function readNoFollow(target: string): { content: Buffer; executable: boolean } 
   }
 }
 
-type ReportFile = Pick<FileRecord, 'path' | 'mode' | 'size' | 'sha256'>
+export type ReportFile = Pick<FileRecord, 'path' | 'mode' | 'size' | 'sha256'>
 
 /** Reads `<from>/report.json` and checks its shape; any problem is `report-missing`. */
-function readReport(from: string): { snapshotId: string | null; files: ReportFile[]; errors: number } {
+export function readReport(from: string): { snapshotId: string | null; files: ReportFile[]; errors: number } {
   const missing = (detail: string) => new SnapshotModified('report-missing', `${path.join(from, 'report.json')} ${detail}.`, 'report.json')
   const read = readNoFollow(path.join(from, 'report.json'))
   if (!read) throw missing('is missing or is not a regular file')
