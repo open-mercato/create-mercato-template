@@ -1,10 +1,12 @@
-import * as fs from 'node:fs'
-import * as path from 'node:path'
 import { safeCommandOutput } from './common.js'
 import { CliError, type ExitCode, type Failure, exitCodes } from './errors.js'
+import type { Finding } from './policy/entries.js'
+import { type PrepareResult, prepare } from './prepare.js'
+import { toolVersion } from './version.js'
 
 export { CliError, exitCodes } from './errors.js'
 export type { ExitCode, Failure } from './errors.js'
+export { toolVersion } from './version.js'
 
 export const commands = ['prepare', 'publish', 'describe'] as const
 export type Command = (typeof commands)[number]
@@ -48,8 +50,8 @@ const versionFlags = ['--version', '-v']
 
 export const help = `Save an Open Mercato app as a clean GitHub template repository.
 
-Status: in development. The commands below are planned and not implemented yet.
-They check their arguments, exit with code 2 and change nothing.
+Status: in development. prepare works. publish and describe are planned and
+not implemented yet: they check their arguments, exit 2 and change nothing.
 
   npx create-mercato-template prepare [<app>] --out <dir> [--include-uncommitted]
       [--allow-file <path>]... [--keep-env <KEY>]... [--json]
@@ -59,10 +61,24 @@ They check their arguments, exit with code 2 and change nothing.
       [--summary <text>] [--when-to-use <text>] [--when-not-to-use <text>] [--json]
   npx create-mercato-template --help | --version
 
-Commands (planned):
-  prepare    build a reviewed snapshot of one pinned commit of the app, offline
-  publish    push exactly that snapshot as a one-commit GitHub template repository
-  describe   print the catalog entry (YAML) for the published template
+Commands:
+  prepare    build a reviewed snapshot of one pinned commit of the app, offline:
+             <dir>/tree (the files to publish) and <dir>/report.json
+  publish    (planned) push exactly that snapshot as a one-commit GitHub
+             template repository
+  describe   (planned) print the catalog entry (YAML) for the published template
+
+prepare options:
+  <app>                  the app directory, the top level of its Git repository
+                         (default: the current directory)
+  --out <dir>            required: a new or empty directory outside the app
+  --include-uncommitted  export the working tree version of changed and
+                         untracked files (they are always listed)
+  --allow-file <path>    export this opaque file (exact repo-relative path);
+                         repeatable
+  --keep-env <KEY>       keep the non-stock value of KEY in the generated
+                         .env.example, when the key does not look secret and
+                         the value passes the secret scan; repeatable
 
 Options:
   -h, --help     show this help (plain text, even with --json)
@@ -77,14 +93,6 @@ Guide: ${repositoryUrl}/blob/main/docs/guide.md
 Spec: ${repositoryUrl}/blob/main/.ai/specs/2026-10-30-create-mercato-template.md
 `
 
-/** The version of this package, read from its own package.json. */
-export function toolVersion(): string {
-  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')) as {
-    version?: unknown
-  }
-  if (typeof manifest.version !== 'string') throw new Error('The package.json of create-mercato-template has no version.')
-  return manifest.version
-}
 
 function isCommand(value: string | undefined): value is Command {
   return (commands as readonly string[]).includes(value ?? '')
@@ -247,8 +255,37 @@ export type Io = {
   stderr: (text: string) => void
 }
 
-/** Runs a parsed command. Its result is merged into the `--json` envelope. */
-export type Dispatch = (command: Command, args: ParsedArgs) => Promise<Record<string, unknown> | void>
+const outcomeTag: unique symbol = Symbol('create-mercato-template outcome')
+
+/**
+ * What a command reports: its exit code, the envelope's `failures`, the
+ * command's own envelope fields, and the text printed without `--json`.
+ */
+export type Outcome = {
+  readonly [outcomeTag]: true
+  exitCode: ExitCode
+  failures: Failure[]
+  fields: Record<string, unknown>
+  /** Printed on stdout without `--json`. */
+  text: string
+  /** Printed on stderr without `--json` when the exit code is not 0. */
+  error?: string
+}
+
+export function outcome(value: Omit<Outcome, typeof outcomeTag>): Outcome {
+  return { [outcomeTag]: true, ...value }
+}
+
+function isOutcome(value: unknown): value is Outcome {
+  return typeof value === 'object' && value !== null && outcomeTag in value
+}
+
+/**
+ * Runs a parsed command. A plain object is merged into the `--json`
+ * envelope of a successful run; an `Outcome` sets the exit code and failures
+ * too.
+ */
+export type Dispatch = (command: Command, args: ParsedArgs) => Promise<Outcome | Record<string, unknown> | void>
 
 const notImplemented: Dispatch = async (command) => {
   throw new CliError(
@@ -256,6 +293,67 @@ const notImplemented: Dispatch = async (command) => {
     exitCodes.usage,
   )
 }
+
+/** The envelope's `failures` entry for a finding: its fields without `level`. */
+function failureOf(finding: Finding): Failure {
+  const failure: Failure = { ...finding }
+  delete failure.level
+  return failure
+}
+
+function findingLine(finding: Finding): string {
+  const where = finding.line === undefined ? finding.path : `${finding.path}:${finding.line}`
+  const rule = finding.ruleId === undefined ? finding.rule : `${finding.rule} (${finding.ruleId})`
+  return `  ${rule}  ${where}${finding.message ? `\n      ${finding.message}` : ''}\n`
+}
+
+/** The text `prepare` prints without `--json`: counts, findings and notices, never a value. */
+export function prepareText(result: PrepareResult): string {
+  const { report } = result
+  const errors = report.findings.filter((finding) => finding.level === 'error')
+  const warnings = report.findings.filter((finding) => finding.level === 'warning')
+  let text = ''
+  if (result.snapshotId !== null)
+    text += `Snapshot of ${report.source.head ?? 'HEAD'} written to ${result.out}/tree: ${report.totals.files} files, ${report.totals.bytes} bytes.\nsnapshotId: ${result.snapshotId}\n`
+  else text += `No snapshot written: ${errors.length} ${errors.length === 1 ? 'error' : 'errors'}. Fix them, commit and run prepare again.\n`
+  if (errors.length > 0) text += `\nErrors (${errors.length}):\n${errors.map(findingLine).join('')}`
+  if (warnings.length > 0) text += `\nWarnings (${warnings.length}), review them before you publish:\n${warnings.map(findingLine).join('')}`
+  if (report.env.emptied.length > 0) text += `\nEmptied in .env.example: ${report.env.emptied.join(', ')}\n`
+  if (report.env.kept.length > 0) text += `Kept in .env.example (--keep-env): ${report.env.kept.join(', ')}\n`
+  text += `\nNotices:\n${report.notices.map((notice) => `  ${notice.code}${notice.detail ? `: ${notice.detail}` : ''}\n`).join('')}`
+  text += `\nReport: ${result.out}/report.json\n`
+  return text
+}
+
+function stringList(value: true | string | string[] | undefined): string[] {
+  return Array.isArray(value) ? value : []
+}
+
+/** `prepare`: maps the flags to `prepare()` and reports its result. */
+export const runPrepare: Dispatch = async (_command, args) => {
+  const out = args.options['--out']
+  if (typeof out !== 'string')
+    throw new CliError('prepare needs --out <dir>: a new or empty directory outside the app. Nothing was read or written.', exitCodes.usage)
+  const result = prepare({
+    app: args.positionals[0] ?? '.',
+    out,
+    includeUncommitted: args.options['--include-uncommitted'] === true,
+    allowFiles: stringList(args.options['--allow-file']),
+    keepEnv: stringList(args.options['--keep-env']),
+  })
+  return outcome({
+    exitCode: result.exitCode,
+    failures: result.failures.map(failureOf),
+    fields: { out: result.out, snapshotId: result.snapshotId, report: result.report },
+    text: prepareText(result),
+    ...(result.exitCode === 0
+      ? {}
+      : { error: `prepare found ${result.failures.length} ${result.failures.length === 1 ? 'error' : 'errors'}; no snapshot was written. See ${result.out}/report.json.` }),
+  })
+}
+
+/** The commands that are implemented; the others answer "not implemented yet". */
+const dispatchCommand: Dispatch = async (command, args) => (command === 'prepare' ? runPrepare(command, args) : notImplemented(command, args))
 
 const defaultIo: Io = {
   stdout: (text) => process.stdout.write(text),
@@ -281,7 +379,7 @@ const failureCodes: readonly number[] = [exitCodes.check, exitCodes.usage, exitC
 export async function main(
   argv: string[] = process.argv.slice(2),
   io: Io = defaultIo,
-  dispatch: Dispatch = notImplemented,
+  dispatch: Dispatch = dispatchCommand,
 ): Promise<number> {
   let parsed: ParsedArgs | undefined
   try {
@@ -296,9 +394,14 @@ export async function main(
     }
     if (parsed.error) throw new CliError(`${parsed.error} Run with --help for usage.`, exitCodes.usage)
     const command = parsed.command as Command
-    const result = (await dispatch(command, parsed)) ?? {}
-    if (parsed.json) io.stdout(`${JSON.stringify(envelope(command, exitCodes.ok, [], result), null, 2)}\n`)
-    return exitCodes.ok
+    const value = await dispatch(command, parsed)
+    const result = isOutcome(value) ? value : outcome({ exitCode: exitCodes.ok, failures: [], fields: value ?? {}, text: '' })
+    if (parsed.json) io.stdout(`${JSON.stringify(envelope(command, result.exitCode, result.failures, result.fields), null, 2)}\n`)
+    else {
+      if (result.text !== '') io.stdout(result.text)
+      if (result.exitCode !== exitCodes.ok && result.error) io.stderr(`\nError: ${result.error}\n`)
+    }
+    return result.exitCode
   } catch (error) {
     const known = error instanceof CliError && failureCodes.includes(error.exitCode)
     const exitCode: ExitCode = known ? error.exitCode : exitCodes.check

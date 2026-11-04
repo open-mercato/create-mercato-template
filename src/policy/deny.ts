@@ -10,9 +10,10 @@
  * - as in `.gitignore`, an entry that matches a directory excludes everything
  *   below it, so `/.mercato/*` excludes `.mercato/a/b`.
  *
- * Until spec Step 8 the root `.env.example` is not excepted from the `.env*` entry:
- * it is excluded like any other `.env*` file, so no unfiltered env file is
- * exported. Step 8 adds the exception together with the regenerated file.
+ * Only the root `.env.example` is excepted from the `.env*` entry (spec Step
+ * 8): `prepare` never exports it as it is, but regenerates it through the env
+ * diff (`src/policy/env.ts`). A `.env.example` below the root is excluded
+ * like any other `.env*` file, with the warning `nested-env-example`.
  */
 export const denyList: readonly string[] = [
   '**/.env*',
@@ -82,9 +83,15 @@ function matches(matcher: Matcher, parts: readonly string[]): boolean {
   return false
 }
 
+/** The one path excepted from the `.env*` entry: it is regenerated, never exported as it is. */
+export const rootEnvExample = '.env.example'
+
 /** The first deny list entry that excludes `path`, or null. */
 export function deniedBy(path: string): string | null {
   const parts = path.split('/')
-  for (const { entry, matcher } of compiled) if (matches(matcher, parts)) return entry
+  for (const { entry, matcher } of compiled) {
+    if (entry === '**/.env*' && path === rootEnvExample) continue
+    if (matches(matcher, parts)) return entry
+  }
   return null
 }

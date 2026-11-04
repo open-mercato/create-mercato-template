@@ -69,8 +69,8 @@ test('the Step 3 fixture app passes the root checks and fills the report fields'
   assert.deepEqual(report.stock, { version: coreVersion, known: true })
   assert.equal(report.packageManager, 'yarn@4.12.0')
   assert.deepEqual(report.engines, { node: '>=24' })
-  const notice = report.notices.find((item) => item.code === 'checks-incomplete')
-  assert.match(notice.detail, /the manifest, the secret scan and the opaque file check only\. The other warnings and notices, the declared env in the manifest and the regenerated \.env\.example come in later versions/)
+  // Step 8 removed the checks-incomplete notice: every check runs.
+  assert.deepEqual(report.notices.map((item) => item.code), ['code-only'])
 })
 
 test('a mixed-line lockfile: root-om-mixed-lines', () => {

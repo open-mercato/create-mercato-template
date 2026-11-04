@@ -2,7 +2,9 @@
 // Mercato app: a package.json that depends on @open-mercato/core with
 // packageManager yarn@4.x, a minimal Yarn 4 yarn.lock that resolves it,
 // src/modules.ts and .env.example. Every later fixture derives from it, so the
-// root rules of Step 4 do not turn the fixtures into errors.
+// root rules of Step 4 do not turn the fixtures into errors. It also has a
+// README.md (Step 8), so the readme-missing warning does not show up in
+// every report.
 //
 // Git runs against repositories in a temp directory, with an isolated
 // configuration (no user or system config, no hooks, a fixed identity and
@@ -59,9 +61,15 @@ const envExample = `# Public URL of the app.
 APP_URL=http://localhost:3000
 `
 
+const readme = `# Fixture app
+
+A minimal Open Mercato app used by the create-mercato-template tests.
+`
+
 /** The files of the minimal app, by repo-relative path. */
 const fixtureFiles = Object.freeze({
   '.gitignore': 'node_modules/\n.env\n',
+  'README.md': readme,
   'package.json': `${JSON.stringify(packageJson, null, 2)}\n`,
   'yarn.lock': yarnLock,
   'src/modules.ts': modulesTs,

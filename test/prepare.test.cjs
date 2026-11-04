@@ -2,7 +2,7 @@
 // test builds a fixture repository in a temp directory from
 // test/helpers/fixture-app.cjs and runs Git against it; no network. "Exit 1"
 // here means prepare() returns an error finding and snapshotId null; the CLI
-// assertions (stdout, stderr, --json) come with Step 8.
+// assertions (stdout, stderr, --json) are in test/prepare-cli.test.cjs.
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const crypto = require('node:crypto')
@@ -17,7 +17,6 @@ const { createFixtureRepo, commitIndexEntries, fixtureFiles, git, gitEnvironment
   './helpers/fixture-app.cjs',
 )
 
-const repoRoot = path.join(__dirname, '..')
 const fixedNow = () => new Date('2026-11-03T12:00:00.000Z')
 
 function newOut() {
@@ -109,15 +108,18 @@ test('module data folders are kept while /data/x and .env.local are excluded and
   assert.ok(!treeFiles(out).includes('.env.local'))
 })
 
-test('the root .env.example is listed under excluded and absent from <out>/tree (until Step 8)', () => {
+test('the root .env.example is not excluded (Step 8): it is regenerated, origin generated', () => {
   const app = createFixtureRepo()
   const { out, report } = run(app)
-  assert.ok(excludedPaths(report, '**/.env*').includes('.env.example'))
-  assert.ok(!treeFiles(out).includes('.env.example'))
-  assert.ok(!report.files.some((file) => file.path === '.env.example'))
+  assert.ok(!excludedPaths(report, '**/.env*').includes('.env.example'))
+  assert.ok(treeFiles(out).includes('.env.example'))
+  const record = report.files.find((file) => file.path === '.env.example')
+  assert.equal(record.origin, 'generated')
+  assert.equal(record.generated, true)
+  assert.equal(fs.readFileSync(path.join(out, 'tree/.env.example'), 'utf8'), fixtureFiles['.env.example'])
 })
 
-test('the report: files, notices code-only and checks-incomplete, written last next to tree/', () => {
+test('the report: files, notice code-only and no checks-incomplete, written last next to tree/', () => {
   const app = createFixtureRepo({ 'bin/run.sh': '#!/bin/sh\necho hi\n' })
   fs.chmodSync(path.join(app, 'bin/run.sh'), 0o755)
   git(app, ['add', 'bin/run.sh'])
@@ -126,7 +128,7 @@ test('the report: files, notices code-only and checks-incomplete, written last n
   assert.equal(result.out, out)
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, 'report.json'), 'utf8')), report)
   assert.deepEqual(fs.readdirSync(out).sort(), ['report.json', 'tree'])
-  assert.deepEqual(report.notices.map((notice) => notice.code), ['code-only', 'checks-incomplete'])
+  assert.deepEqual(report.notices.map((notice) => notice.code), ['code-only'])
   assert.equal(report.schema, 1)
   assert.deepEqual(report.tool.name, 'create-mercato-template')
   // Spec Step 6: the bundled gitleaks rules the report names.
@@ -240,13 +242,13 @@ test('a dirty worktree: changes are listed and not exported by default', () => {
   assert.deepEqual(report.uncommitted, dirtyList)
   assert.equal(report.source.dirty, true)
   assert.equal(report.source.includeUncommitted, false)
-  assert.deepEqual(report.notices.map((notice) => notice.code), ['code-only', 'checks-incomplete', 'uncommitted-not-exported'])
+  assert.deepEqual(report.notices.map((notice) => notice.code), ['code-only', 'uncommitted-not-exported'])
   assert.equal(fs.readFileSync(path.join(out, 'tree/src/a.ts'), 'utf8'), 'export const a = 1\n')
   assert.ok(treeFiles(out).includes('src/gone.ts'))
   assert.ok(!treeFiles(out).includes('src/staged.ts'))
   assert.ok(!treeFiles(out).includes('src/untracked.ts'))
-  // Every exported file comes from the pinned tree, except the generated manifest.
-  assert.ok(report.files.every((file) => file.origin === 'tree' || (file.origin === 'generated' && file.path === 'mercato-template.json')))
+  // Every exported file comes from the pinned tree, except the generated files.
+  assert.ok(report.files.every((file) => file.origin === 'tree' || (file.origin === 'generated' && ['.env.example', 'mercato-template.json'].includes(file.path))))
   assert.ok(!seen.some((item) => item.endsWith(`${path.sep}.env`)), 'the ignored .env was read')
 })
 
@@ -257,7 +259,7 @@ test('--include-uncommitted: modified, added, deleted and untracked are exported
   assert.equal(result.exitCode, 0)
   assert.deepEqual(report.uncommitted, dirtyList)
   assert.equal(report.source.includeUncommitted, true)
-  assert.deepEqual(report.notices.map((notice) => notice.code), ['code-only', 'checks-incomplete'])
+  assert.deepEqual(report.notices.map((notice) => notice.code), ['code-only'])
   const byPath = Object.fromEntries(report.files.map((file) => [file.path, file]))
   assert.equal(byPath['src/a.ts'].origin, 'worktree')
   assert.equal(byPath['src/staged.ts'].origin, 'worktree')
@@ -428,9 +430,10 @@ test('computeSnapshotId: sorted <path>\\t<mode>\\t<sha256>\\n lines, sha256 (gol
 test('snapshotId equals a golden value for the fixture app', () => {
   // Changes when the fixture app or the generated files change: Step 5 added
   // mercato-template.json (whose createdWith.version is the package version,
-  // so a version bump changes it too), Step 8 adds the regenerated .env.example.
+  // so a version bump changes it too), Step 8 added the regenerated
+  // .env.example and the fixture README.md.
   const { result } = run(createFixtureRepo())
-  assert.equal(result.snapshotId, 'f2177b5023bff572ad956b63a68a79f4460d14f5fa688ada893941b7a7ac1d12')
+  assert.equal(result.snapshotId, 'fdca3ea47bc77048b32aa47905dbe22eeb67068d89ef1d3a7a826ceae3d98553')
   assert.equal(result.snapshotId, computeSnapshotId(result.report.files))
 })
 
@@ -518,22 +521,8 @@ test('a failed write of <out> is io-error, exit 1, with no partial tree', { skip
   }
 })
 
-test('node bin/cli.cjs prepare . --out <dir> still exits 2 "not implemented yet" and writes nothing', () => {
-  const app = createFixtureRepo()
-  const out = newOut()
-  const result = spawnSync(process.execPath, [path.join(repoRoot, 'bin/cli.cjs'), 'prepare', '.', '--out', out], {
-    cwd: app,
-    encoding: 'utf8',
-  })
-  assert.equal(result.status, 2)
-  assert.match(result.stderr, /prepare is not implemented yet/)
-  assert.equal(result.stdout, '')
-  assert.equal(fs.existsSync(out), false)
-  assert.equal(fs.existsSync(path.dirname(out)) && fs.readdirSync(path.dirname(out)).length, 0)
-})
-
 test('the fixture app holds the files the later root checks need', () => {
-  assert.deepEqual(Object.keys(fixtureFiles).sort(), ['.env.example', '.gitignore', 'package.json', 'src/modules.ts', 'yarn.lock'])
+  assert.deepEqual(Object.keys(fixtureFiles).sort(), ['.env.example', '.gitignore', 'README.md', 'package.json', 'src/modules.ts', 'yarn.lock'])
   const manifest = JSON.parse(fixtureFiles['package.json'])
   assert.match(manifest.packageManager, /^yarn@4\./)
   assert.ok(manifest.dependencies['@open-mercato/core'])

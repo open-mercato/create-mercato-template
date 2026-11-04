@@ -53,6 +53,8 @@ test('module data folders are never excluded; /data/ and .env.local are', () => 
   assert.equal(deniedBy('.env.local'), '**/.env*')
 })
 
-test('until Step 8 the root .env.example is excluded like any .env file', () => {
-  assert.equal(deniedBy('.env.example'), '**/.env*')
+test('only the root .env.example is excepted from **/.env* (Step 8); a nested one is excluded', () => {
+  assert.equal(deniedBy('.env.example'), null)
+  assert.equal(deniedBy('apps/web/.env.example'), '**/.env*')
+  assert.equal(deniedBy('.env.example.local'), '**/.env*')
 })

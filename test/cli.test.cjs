@@ -63,12 +63,13 @@ test('help wins over every usage error where a flag is expected', () => {
   for (const args of [['prepare', '--bogus', '-h'], ['publish', '--public', '--private', '--help'], ['init', '--help'], ['describe', '--out', 'x', '-h']]) {
     const result = cli(...args)
     assert.equal(result.status, 0, JSON.stringify(args))
-    assert.match(result.stdout, /Commands \(planned\)/)
+    assert.match(result.stdout, /Commands:/)
   }
 })
 
 test('--help and -h as the value of a flag do not print help', () => {
-  for (const args of [['describe', '--summary', '--help'], ['describe', '--summary', '-h'], ['prepare', '--out', '--help']]) {
+  // prepare --out --help is in test/prepare-cli.test.cjs: prepare runs now.
+  for (const args of [['describe', '--summary', '--help'], ['describe', '--summary', '-h'], ['publish', '--from', '--help']]) {
     const result = cli(...args)
     assert.equal(result.status, 2, JSON.stringify(args))
     assert.equal(result.stdout, '')
@@ -77,11 +78,10 @@ test('--help and -h as the value of a flag do not print help', () => {
   }
 })
 
+const plannedCommands = commands.filter((command) => command !== 'prepare')
+
 test('planned commands exit 2 with a clear "not implemented yet" message', () => {
   const cases = [
-    ['prepare'],
-    ['prepare', '.', '--out', 'out'],
-    ['prepare', '--out', 'out', '--include-uncommitted', '--allow-file', 'a.sql', '--allow-file', 'b.sql', '--keep-env', 'APP_URL'],
     ['publish', '--from', 'out'],
     ['publish', '--from', 'out', '--repo', 'acme/app', '--private', '--expect', 'abc', '--resume'],
     ['describe'],
@@ -97,7 +97,8 @@ test('planned commands exit 2 with a clear "not implemented yet" message', () =>
 })
 
 test('planned commands with --json print one envelope with rule usage', () => {
-  for (const command of commands) {
+  assert.deepEqual(plannedCommands, ['publish', 'describe'])
+  for (const command of plannedCommands) {
     const result = cli(command, '--json')
     assert.equal(result.status, 2)
     assert.equal(result.stderr, '')
@@ -289,5 +290,6 @@ test('main returns the exit code and never throws', async () => {
   assert.equal((await capture(['--version'])).code, 0)
   assert.equal((await capture(['--version'])).stdout, `${packageJson.version}\n`)
   assert.equal((await capture(['publish'])).code, 2)
+  assert.equal((await capture(['prepare'])).code, 2)
   assert.equal((await capture(['nope'])).code, 2)
 })
