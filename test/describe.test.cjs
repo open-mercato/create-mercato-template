@@ -206,7 +206,7 @@ test('a --when-to-use value without the "Use when " prefix, or too short, is exi
     [['--use-case', 'b2b'], /--use-case must be one of crm, commerce, b2b-portal/],
     [['--when-not-to-use', 'x'.repeat(161)], /--when-not-to-use must have 1 to 160 characters/],
     [['--when-not-to-use', 'Not for [stores](x).'], /--when-not-to-use is not plain text/],
-    [['--repo', 'acme/b2b/portal'], /--repo acme\/b2b\/portal is not a GitHub <owner>\/<name>/],
+    [['--repo', 'acme/b2b/portal'], /--repo is not a GitHub <owner>\/<name>/],
   ]
   for (const [flags, message] of cases) {
     const args = flags[0] === '--repo' ? flags : ['--repo', 'acme/app', ...flags]
@@ -282,7 +282,7 @@ UNDOCUMENTED_FLAG=
   assert.equal(value.complete, false)
   assert.deepEqual(value.missing, ['declares.env'])
   assert.deepEqual(value.entry.declares.env, [{ name: 'SHOP_CURRENCY', description: 'Default currency of the shop.' }, { name: 'PARTNER_KEY_ID' }, { name: 'UNDOCUMENTED_FLAG' }])
-  assert.match(value.yaml, /^# declares\.env: PARTNER_KEY_ID, UNDOCUMENTED_FLAG have no description\./m)
+  assert.match(value.yaml, /^# declares\.env: PARTNER_KEY_ID, UNDOCUMENTED_FLAG have no usable description/m)
   assert.ok(!value.text.includes(email))
 })
 
@@ -320,4 +320,47 @@ test('usage errors win over a missing report (exit 2 before exit 1)', () => {
   const empty = tempDir('cmt-empty-')
   assert.equal(cli(['describe', '--from', empty, '--repo', 'acme/app', '--use-case', 'nope']).status, 2)
   assert.equal(cli(['describe', '--from', empty]).status, 2)
+})
+
+test('no email address or token typed in --repo or in the --from path reaches stdout, stderr or the envelope', () => {
+  const out = prepared()
+  const inside = path.join(tempDir('cmt-'), `copy-${email}`)
+  fs.cpSync(out, inside, { recursive: true })
+  const empty = path.join(tempDir('cmt-'), `empty-${email}-${token}`)
+  fs.mkdirSync(empty)
+  const cases = [
+    { args: ['--from', out, '--repo', email], status: 2 },
+    { args: ['--from', out, '--repo', token], status: 2 },
+    { args: ['--from', path.join(out, `nope-${email}`), '--repo', 'acme/app'], status: 2 },
+    { args: ['--from', empty, '--repo', 'acme/app'], status: 1 },
+  ]
+  for (const { args, status } of cases)
+    for (const json of [false, true]) {
+      const result = cli(['describe', ...args, ...(json ? ['--json'] : [])])
+      assert.equal(result.status, status, args.join(' '))
+      const output = result.stdout + result.stderr
+      assert.ok(!output.includes(email), `an email address reached the output: ${args.join(' ')}`)
+      assert.ok(!output.includes(token), `a token reached the output: ${args.join(' ')}`)
+    }
+  const fine = cli(['describe', '--from', inside, '--repo', 'acme/app'])
+  assert.equal(fine.status, 0)
+  assert.ok(!fine.stdout.includes(email) && !fine.stderr.includes(email))
+})
+
+test('more than 30 declared keys: declares.env is listed under missing, with a comment', () => {
+  const keys = Array.from({ length: 31 }, (_, index) => `# Setting number ${index + 1}.\nSHOP_SETTING_${index + 1}=\n`).join('')
+  const out = prepared({ '.env.example': `${fixtureFiles['.env.example']}${keys}` })
+  const value = describe({ from: out, repo: 'acme/app', useCase: 'crm', whenToUse })
+  assert.equal(value.entry.declares.env.length, 31)
+  assert.deepEqual(value.missing, ['declares.env'])
+  assert.equal(value.complete, false)
+  assert.match(value.yaml, /^# declares\.env: 31 keys; the catalog takes at most 30\./m)
+  assert.doesNotMatch(value.yaml, /no usable description/)
+})
+
+test('a refusal of <from> says what describe did not do, not what publish did not do', () => {
+  const result = cli(['describe', '--from', tempDir('cmt-empty-'), '--repo', 'acme/app'])
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /no entry was printed/)
+  assert.doesNotMatch(result.stderr, /publish it|Nothing remote/)
 })

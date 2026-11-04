@@ -76,9 +76,15 @@ export type DescribeResult = {
   text: string
 }
 
-function usage(message: string): CliError {
-  return new CliError(`${message} Nothing was read or changed.`, exitCodes.usage)
+function usage(message: string, done = 'Nothing was read or changed.'): CliError {
+  return new CliError(`${message} ${done}`, exitCodes.usage)
 }
+
+/** What `describe` says after a refusal of `<from>`. */
+const describeNext = 'Nothing was changed and no entry was printed. Run prepare again, then describe the new snapshot.'
+
+/** The catalog keeps at most this many declared env keys per entry (`descriptor.ts`). */
+export const declaredEnvMax = 30
 
 /**
  * Why `value` cannot go into the output, or null: not plain text, an email
@@ -104,7 +110,7 @@ function checkText(flag: string, value: string, min: number, max: number): void 
  * `lib/schema/descriptor.ts` checks them, and `--repo` a GitHub name.
  */
 export function checkDescribeFlags(options: DescribeOptions): void {
-  if (options.repo !== undefined && parseRepo(options.repo) === null) throw usage(`--repo ${options.repo} is not a GitHub <owner>/<name>.`)
+  if (options.repo !== undefined && parseRepo(options.repo) === null) throw usage('--repo is not a GitHub <owner>/<name>.')
   if (options.useCase !== undefined && !(useCases as readonly string[]).includes(options.useCase))
     throw usage(`--use-case must be one of ${useCases.join(', ')}.`)
   if (options.summary !== undefined) checkText('--summary', options.summary, summaryLength.min, summaryLength.max)
@@ -135,10 +141,10 @@ export function publishedRepo(from: string): string | null {
 export function resolveRepo(from: string, flag: string | undefined): string {
   const published = publishedRepo(from)
   if (flag !== undefined && published !== null && flag.toLowerCase() !== published.toLowerCase())
-    throw usage(`--repo ${flag} differs from ${published}, the repository in ${path.join(from, 'publication.json')}. Leave --repo out, or pass the same repository.`)
+    throw usage(`--repo ${flag} differs from ${published}, the repository in ${path.join(from, 'publication.json')}. Leave --repo out, or pass the same repository.`, 'Nothing was changed.')
   const repo = flag ?? published
   if (repo === null)
-    throw usage(`describe needs the repository: ${path.join(from, 'publication.json')} is missing or names none. Pass --repo <owner/name>.`)
+    throw usage(`describe needs the repository: ${path.join(from, 'publication.json')} is missing or names none. Pass --repo <owner/name>.`, 'Nothing was changed.')
   return repo
 }
 
@@ -152,23 +158,23 @@ type ManifestFacts = { description: string | null; env: DeclaredEnvEntry[] }
  * `publish`'s `verify`.
  */
 export function readSnapshotFacts(from: string): ManifestFacts {
-  const report = readReport(from)
+  const report = readReport(from, describeNext)
   if (report.errors > 0 || report.snapshotId === null)
-    throw new SnapshotModified('report-errors', `report.json lists ${report.errors} error finding(s): prepare refused this snapshot, so it has no catalog entry.`, 'report.json')
+    throw new SnapshotModified('report-errors', `report.json lists ${report.errors} error finding(s): prepare refused this snapshot, so it has no catalog entry.`, 'report.json', describeNext)
   const listed = report.files.find((file) => file.path === manifestPath)
   const tree = path.join(from, 'tree')
   const treeStat = fs.lstatSync(tree, { throwIfNoEntry: false })
   const read = treeStat?.isDirectory() ? readNoFollow(path.join(tree, manifestPath)) : null
-  if (!listed || !read) throw new SnapshotModified('file-missing', `${manifestPath} is missing from report.json or from ${tree}.`, manifestPath)
+  if (!listed || !read) throw new SnapshotModified('file-missing', `${manifestPath} is missing from report.json or from ${tree}.`, manifestPath, describeNext)
   if (read.content.length !== listed.size || sha256Hex(read.content) !== listed.sha256)
-    throw new SnapshotModified('file-changed', `${manifestPath} differs from report.json.`, manifestPath)
+    throw new SnapshotModified('file-changed', `${manifestPath} differs from report.json.`, manifestPath, describeNext)
   let manifest: Record<string, unknown>
   try {
     const value: unknown = JSON.parse(read.content.toString('utf8'))
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('not an object')
     manifest = value as Record<string, unknown>
   } catch {
-    throw new SnapshotModified('file-changed', `${manifestPath} is not a JSON object.`, manifestPath)
+    throw new SnapshotModified('file-changed', `${manifestPath} is not a JSON object.`, manifestPath, describeNext)
   }
   const env: DeclaredEnvEntry[] = []
   for (const item of Array.isArray(manifest.env) ? manifest.env : []) {
@@ -216,7 +222,10 @@ export function entryYaml(entry: CatalogEntry, missing: readonly MissingField[])
   if (entry.declares) {
     if (missing.includes('declares.env')) {
       const names = entry.declares.env.filter((item) => item.description === undefined).map((item) => item.name)
-      yaml += `# declares.env: ${names.join(', ')} ${names.length === 1 ? 'has' : 'have'} no description. Add a comment line above each key in .env.example, commit and run prepare again.\n`
+      if (names.length > 0)
+        yaml += `# declares.env: ${names.join(', ')} ${names.length === 1 ? 'has' : 'have'} no usable description (plain text of 1 to 240 characters, no email address). Write one in the comment line above each key in .env.example, commit and run prepare again.\n`
+      if (entry.declares.env.length > declaredEnvMax)
+        yaml += `# declares.env: ${entry.declares.env.length} keys; the catalog takes at most ${declaredEnvMax}. Keep the keys a user must fill.\n`
     }
     yaml += yamlField('declares', entry.declares)
   }
@@ -243,7 +252,7 @@ export function describe(options: DescribeOptions): DescribeResult {
   if (entry.useCase === undefined) missing.push('useCase')
   if (entry.summary === undefined) missing.push('summary')
   if (entry.whenToUse === undefined) missing.push('whenToUse')
-  if (facts.env.some((item) => item.description === undefined)) missing.push('declares.env')
+  if (facts.env.length > declaredEnvMax || facts.env.some((item) => item.description === undefined)) missing.push('declares.env')
 
   const [owner, name] = repo.split('/') as [string, string]
   const file = `templates/${owner}/${name}.yml`

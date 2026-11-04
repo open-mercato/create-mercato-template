@@ -521,8 +521,9 @@ export async function main(
   } catch (error) {
     const known = error instanceof CliError && failureCodes.includes(error.exitCode)
     const exitCode: ExitCode = known ? error.exitCode : exitCodes.check
+    // Every message is redacted: a flag value or a path the user typed may hold an email address or a token.
     const failure: Failure = known
-      ? error.failure
+      ? { ...error.failure, ...(typeof error.failure.message === 'string' ? { message: redact(error.failure.message) } : {}) }
       : { rule: 'internal', message: redact(error instanceof Error ? error.message : String(error)) }
     if (parsed?.json)
       io.stdout(`${JSON.stringify(envelope(parsed.command, exitCode, [failure]), null, 2)}\n`)
