@@ -210,6 +210,24 @@ The implementation is strict TypeScript under `src/`, compiled to `dist/`; the s
 
 The module inventory tests read vendored copies of the scaffold's `src/modules.ts` and `src/official-modules.generated.ts` at open-mercato `v0.9.0` and `main` `a447cc552` (`test/fixtures/scaffold/`, byte for byte, refs and sha256 in `SOURCE.md` there), and validate the manifest against `test/fixtures/catalog/mercato-template-1.json`, a draft written from the catalog spec until the catalog publishes its schema. A small validator in `test/helpers/json-schema.cjs` covers the keywords those schemas use.
 
+### Release checks (save then import)
+
+The release checks save a real app with this tool and create a new app from the saved template, with nothing sent to github.com and nothing published to npm (spec Step 11). CI runs them on every pull request in the `release-checks` job of the Tests workflow, on two legs: `create-mercato-app@0.9.0` and `create-mercato-app@latest`. Run them by hand before a release:
+
+```bash
+password="$(openssl rand -hex 24)"
+docker run -d --rm --name mercato-template-e2e-db -p 127.0.0.1:54329:5432 \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$password" -e POSTGRES_DB=open-mercato \
+  -v "$PWD/test/release-e2e/postgres-init.sql:/docker-entrypoint-initdb.d/00-extensions.sql:ro" \
+  pgvector/pgvector:pg17-trixie
+npm run build
+RELEASE_E2E_DATABASE_URL="postgres://postgres:$password@127.0.0.1:54329/open-mercato" \
+  npm run test:release:local -- --create-app create-mercato-app@0.9.0 --results /tmp/mercato-template-release-checks
+docker rm -f mercato-template-e2e-db
+```
+
+A run scaffolds an app (`--preset empty --agents none --no-init-git`), installs it, adds an `@app` module, a declared env key with a comment and an ignored `.env` with a fake key made for the run, commits, runs `prepare` and `publish` (to the gh shim in `test/release-e2e/gh-shim.mjs`), then runs `create-mercato-app --app-url https://github.com/<o>/<r>/tree/<sha>` against a GitHub API stand-in on `127.0.0.1` (`OM_CREATE_APP_GITHUB_API_BASE_URL`). It checks that the imported app registers the same modules, that its `.env.example` holds only stock values and that the fake key is nowhere in the published repository. With a database (on this machine only; it is initialized from scratch) it then installs, generates, initializes, builds and starts the imported app and signs in as the seeded admin. Requirements, options and how each stand-in keeps the run local: [`test/release-e2e/README.md`](../test/release-e2e/README.md). The fast unit tests of its offline parts are in `test/release-local.test.cjs`.
+
 ### Stock table
 
 The tool recognizes the values a fresh `create-mercato-app` scaffold ships with, so a stock app does not fail its own checks. `src/stock/table.json` holds, for every stable `create-mercato-app` version on npm (0.4.5 to 0.9.0 today; prereleases such as `-canary-` and `-develop.` are skipped): the stock `.env.example` (identical files stored once, by sha256), each key with its stock values, active and commented, every credential URL string (`scheme://user:password@host`) in any text file of the scaffold, and the sha256 of a stock root `README.md` when there is one. `src/stock.ts` looks entries up by the app's pinned `@open-mercato/core` version, which releases in lockstep with `create-mercato-app`. An unknown version (newer than the tool, or a prerelease) is matched against every known version and reported as `known: false`; no check changes because of it. The commands use the table from the steps that ship them.
