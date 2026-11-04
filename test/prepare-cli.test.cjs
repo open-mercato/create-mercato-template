@@ -143,19 +143,28 @@ test('the flags reach prepare(): --include-uncommitted, --allow-file and --keep-
   assert.equal(fs.readFileSync(path.join(out, 'tree', '.env.example'), 'utf8'), 'APP_URL=https://shop.example.com\n')
 })
 
-test('prepare usage errors exit 2 before any Git read: no --out, a bad --keep-env, --out inside the app', () => {
+/** A directory holding a `git` that only records that it ran, for PATH. */
+function gitShim() {
+  const directory = tempDir('cmt-shim-')
+  const marker = path.join(directory, 'git-was-called')
+  fs.writeFileSync(path.join(directory, 'git'), `#!/bin/sh\necho called >> '${marker}'\nexit 1\n`, { mode: 0o755 })
+  return { env: { PATH: `${directory}${path.delimiter}${process.env.PATH}` }, marker }
+}
+
+test('prepare usage errors exit 2 before any Git read: no --out, a bad --keep-env, --out inside the app', { skip: process.platform === 'win32' }, () => {
   const app = createFixtureRepo()
+  const shim = gitShim()
   for (const [args, pattern] of [
     [['prepare', app], /prepare needs --out <dir>/],
     [['prepare', app, '--out', newOut(), '--keep-env', 'NOT A KEY'], /--keep-env takes an env key name/],
     [['prepare', '--out', '--help'], /--out --help is inside the app/],
     [['prepare', 'missing-dir', '--out', newOut()], /The app directory .*missing-dir does not exist/],
   ]) {
-    const result = cli(args, { cwd: app })
+    const result = cli(args, { cwd: app, env: shim.env })
     assert.equal(result.status, 2, JSON.stringify(args))
     assert.equal(result.stdout, '')
     assert.match(result.stderr, pattern)
-    const json = cli([...args, '--json'], { cwd: app })
+    const json = cli([...args, '--json'], { cwd: app, env: shim.env })
     assert.equal(json.status, 2)
     const value = JSON.parse(json.stdout)
     assert.deepEqual(Object.keys(value).sort(), ['command', 'exitCode', 'failures', 'ok', 'schema', 'tool'])
@@ -163,6 +172,12 @@ test('prepare usage errors exit 2 before any Git read: no --out, a bad --keep-en
   }
   // `--help` was read as the value of --out, not as help, and nothing was written.
   assert.equal(fs.existsSync(path.join(app, '--help')), false)
+  // No Git command ran: the shim on PATH was never called.
+  assert.equal(fs.existsSync(shim.marker), false)
+  // The shim does work: with valid arguments prepare runs it (and fails the Git check).
+  const reached = cli(['prepare', app, '--out', newOut(), '--json'], { env: shim.env })
+  assert.equal(reached.status, 1)
+  assert.equal(fs.existsSync(shim.marker), true)
 })
 
 test('a directory that is not a Git repository: exit 1, not-git-repo, only report.json', () => {

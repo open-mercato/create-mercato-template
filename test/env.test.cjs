@@ -301,3 +301,28 @@ test('buildEnv keeps line positions and never puts a value in a finding', () => 
   assert.equal(JSON.stringify(result.findings).includes(value), false)
   assert.deepEqual(result.findings.map((finding) => finding.rule).sort(), ['env-keep-unknown', 'env-line-dropped', 'env-undocumented'])
 })
+
+test('regression: a multi-line quoted value is dropped up to its closing quote; no fragment reaches a message, the report or the file', () => {
+  const fragment = randomText('ml-b64', 40)
+  const env = ['APP_URL=http://localhost:3000', 'WELCOME_TEXT="Hello', `${fragment}=`, 'more text', 'bye"', '# A note after it.', 'SHOP_THEME=dark', ''].join('\n')
+  const run1 = run(createFixtureRepo({ '.env.example': env }))
+  const { result, out, report } = run1
+  assert.equal(result.exitCode, 0)
+  assert.deepEqual(report.env.dropped, [2, 3, 4, 5])
+  assert.deepEqual(report.env.emptied, ['SHOP_THEME'])
+  assert.deepEqual(report.env.declared, ['SHOP_THEME'])
+  assert.equal(generated(out), ['APP_URL=http://localhost:3000', '', '', '', '', '# A note after it.', 'SHOP_THEME=', ''].join('\n'))
+  assertNoValue(run1, [fragment, 'Hello', 'more text'])
+  // A commented line with an open quote is one line: the next lines are read.
+  const commented = parseEnvLines(['# NOTE="open', 'A_KEY=x', ''].join('\n'))
+  assert.deepEqual(commented.map((line) => line.kind), ['dropped', 'assignment'])
+  // An unclosed quote at the end drops every line after it.
+  assert.deepEqual(parseEnvLines(['A="x', 'B=y', 'C=z'].join('\n')).map((line) => line.kind), ['dropped', 'dropped', 'dropped'])
+})
+
+test('a declared key whose name the manifest cannot hold: env-undocumented without the name', () => {
+  const run1 = run(createFixtureRepo({ '.env.example': 'lower_case_flag=\n_X=\n' }))
+  const undocumented = run1.report.findings.filter((finding) => finding.rule === 'env-undocumented')
+  assert.deepEqual(undocumented.map((finding) => finding.line), [1, 2])
+  for (const finding of undocumented) assert.equal(/lower_case_flag|_X\b/.test(finding.message), false)
+})

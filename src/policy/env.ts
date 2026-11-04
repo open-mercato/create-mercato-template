@@ -44,43 +44,62 @@ const activeAssignment = /^(\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=)(.*)$/
 // prose such as `# note=hello` stays a comment.
 const commentedAssignment = /^(\s*#\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)=)(.*)$/
 
-/**
- * True when `value` is a value the parser can read on one line: unquoted, or
- * one quoted string (single or double, `\"` escapes in double quotes)
- * followed by nothing or by an inline comment.
- */
-function readableValue(value: string): boolean {
-  const quote = value[0]
-  if (quote !== '"' && quote !== "'") return true
-  for (let index = 1; index < value.length; index++) {
-    if (quote === '"' && value[index] === '\\') {
+/** The index of the first `quote` in `text` from `start` (`\"` escapes in double quotes), or -1. */
+function closingQuote(text: string, quote: string, start: number): number {
+  for (let index = start; index < text.length; index++) {
+    if (quote === '"' && text[index] === '\\') {
       index++
       continue
     }
-    if (value[index] === quote) return /^(?:\s+#.*)?\s*$/.test(value.slice(index + 1))
+    if (text[index] === quote) return index
   }
-  return false
+  return -1
+}
+
+/**
+ * Whether `value` can be read on one line: `ok` when it is unquoted, or one
+ * quoted string (single or double, `\"` escapes in double quotes) followed by
+ * nothing or by an inline comment; `open` when its quote is not closed on
+ * this line (a multi-line value); `bad` otherwise.
+ */
+function readValue(value: string): 'ok' | 'open' | 'bad' {
+  const quote = value[0]
+  if (quote !== '"' && quote !== "'") return 'ok'
+  const end = closingQuote(value, quote, 1)
+  if (end < 0) return 'open'
+  return /^(?:\s+#.*)?\s*$/.test(value.slice(end + 1)) ? 'ok' : 'bad'
 }
 
 /**
  * Parses each line of a `.env.example` (spec, Env diff item 1): blank,
  * comment, assignment (`KEY=VALUE`, optional `export `, optional quotes) or
- * commented assignment (`# KEY=VALUE` with an upper-case key). Anything else,
- * such as a multi-line quoted value, is `dropped`.
+ * commented assignment (`# KEY=VALUE` with an upper-case key). Anything else
+ * is `dropped`. A quoted value whose quote is not closed on its line is a
+ * multi-line value: that line and every line up to and including the one that
+ * closes the quote are dropped, so text inside the value is never read as a
+ * key, a comment or a value (at the end of the file, every line after it).
  */
 export function parseEnvLines(text: string): EnvLine[] {
   const lines = text.split(/\r?\n/)
   // The final newline makes an empty last element, which is not a line.
   if (lines.length > 0 && lines.at(-1) === '') lines.pop()
+  let openQuote: string | null = null
   return lines.map((raw, index): EnvLine => {
     const line = index + 1
+    if (openQuote !== null) {
+      if (closingQuote(raw, openQuote, 0) >= 0) openQuote = null
+      return { kind: 'dropped', line, text: raw }
+    }
     const trimmed = raw.trim()
     if (trimmed === '') return { kind: 'blank', line, text: raw }
     const commented = trimmed.startsWith('#')
     const match = (commented ? commentedAssignment : activeAssignment).exec(raw)
     if (!match) return commented ? { kind: 'comment', line, text: raw } : { kind: 'dropped', line, text: raw }
     const value = match[3].trim()
-    if (!readableValue(value)) return { kind: 'dropped', line, text: raw }
+    const state = readValue(value)
+    // A comment is one line, so only an active assignment opens a multi-line value.
+    if (state === 'open' && !commented) openQuote = value[0]
+    if (state !== 'ok') return { kind: 'dropped', line, text: raw }
     return { kind: 'assignment', line, text: raw, key: match[2], value, commented, prefix: match[1] }
   })
 }
@@ -250,7 +269,9 @@ function declaredEnv(lines: readonly EnvLine[], input: EnvInput, table: StockTab
         level: 'warning',
         path: envExamplePath,
         line: line.line,
-        message: undocumentedMessage(line.key, 'but its name is not upper case (A-Z, 0-9, _), so the manifest cannot declare it'),
+        // The name is left out: only a name the manifest accepts is ever printed.
+        message:
+          'A key the template declares (the stock .env.example lacks it) has a name the manifest cannot hold: 2 to 64 characters of A-Z, 0-9 and _, starting with a letter. Rename it in .env.example.',
       })
       return
     }
