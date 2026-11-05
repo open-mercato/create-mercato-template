@@ -28,8 +28,8 @@
 
 ## Progress
 
-> Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
+> Convention: `- [ ]` pending, `- [x]` done. Append ` - <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: CHANGELOG
 
-- [ ] 1.1 Fold the Unreleased bullets into the 0.1.0 entry and remove the Unreleased section
+- [x] 1.1 Fold the Unreleased bullets into the 0.1.0 entry and remove the Unreleased section - 5cf95e1
