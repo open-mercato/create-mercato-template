@@ -8,7 +8,8 @@
 //   npm run secret-rules -- --input <file>   read a local copy instead of fetching
 //
 // It runs with Node's type stripping and imports nothing from src/ but types
-// and src/rules/pattern.ts, which checks that the scan can bound each rule.
+// and src/rules/pattern.ts, which checks that the scan can bound each rule
+// (test/secret-scan-cost.test.cjs also compiles each one for src/rules/pike.ts).
 // TOML is read by the small strict reader below, for the subset gitleaks.toml
 // uses, so no TOML parser is a dependency. Rules left out are listed, each
 // with a reason, in the committed scripts/secret-rules-skipped.json; any other
@@ -685,14 +686,17 @@ export function buildSecretRules(toml: string, skipped: SkippedRule[], source: R
   for (const rule of rules) {
     if (rule.regex === null) continue
     try {
-      analyzePattern(rule.regex)
+      // Every source the scan derives must compile.
+      const facts = analyzePattern(rule.regex)
+      for (const anchor of facts.anchors ?? []) new RegExp(anchor.source, rule.regex.flags)
+      if (facts.split) new RegExp(facts.split.tail, rule.regex.flags)
     } catch (error) {
-      if (!(error instanceof PatternError)) throw error
+      if (!(error instanceof PatternError) && !(error instanceof SyntaxError)) throw error
       unread.push(`${rule.id}: ${error.message}`)
     }
   }
   if (unread.length > 0)
-    throw new Error(`${unread.length} converted rule(s) cannot be read by src/rules/pattern.ts. Teach the reader the construct:\n  ${unread.join('\n  ')}`)
+    throw new Error(`${unread.length} converted rule(s) cannot be read by src/rules/pattern.ts, or a source it derives does not compile. Teach the reader the construct:\n  ${unread.join('\n  ')}`)
   return {
     schema: 1,
     source,

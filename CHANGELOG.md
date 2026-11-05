@@ -4,8 +4,8 @@
 
 ### Fixed
 
-- The secret scan no longer slows down on large single-line text (#9). A 1 MB hex string with every vendor keyword took 134 s; it now takes 0.26 s, and every 1 MB input measured, the worst cases constructed for the scan included, takes under 1.5 s. The scan finds the same matches as before: each rule is tried only near the literal parts every match holds, and a rule whose cost cannot be proven linear runs capped with a counted work limit, never a clock. The bound and the benchmark (`npm run bench:secret-scan`) are in the guide, under Scan cost.
-- New error `scan-limit`: a secret rule that cannot run within its fixed limits on a file (a run of more than 4,096 repeated characters where it could match, or more work than its limit) stops `prepare` with exit 1, `ruleId` and the line. The file is refused, never exported unscanned. Five rules can raise it: `curl-auth-header`, `curl-auth-user`, `kubernetes-secret-yaml`, `nuget-config-password` and `private-key`.
+- The secret scan no longer slows down on large single-line text (#9). A 1 MB hex string with every vendor keyword took 133 s and now takes 0.15 s. Every 1 MB input measured, the worst cases constructed for the scan included, takes under 4 s. The scan finds the same matches as before: each rule is tried only near the literal parts every match holds. The five rules whose backtracking cannot be proven cheap run on a linear-time matcher, so a file with a long run of carriage returns after `curl`, which used to make the scan hang, is now scanned in seconds. The bound and the benchmark (`npm run bench:secret-scan`) are in the guide, under Scan cost.
+- New error `scan-limit`: a rule on the linear matcher (`curl-auth-header`, `curl-auth-user`, `kubernetes-secret-yaml`, `nuget-config-password`, `private-key`) that passes its counted step limit on a file stops `prepare` with exit 1, `ruleId` and the line. The file is refused, never exported unscanned. No input measured comes near the limit.
 
 ## 0.1.0
 

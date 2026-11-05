@@ -30,25 +30,23 @@
  *
  * Scan cost (spec, Secret scan, "Scan cost"). gitleaks runs its patterns on
  * RE2, in linear time; JavaScript backtracks. So the scan finds the same
- * matches as a global `exec` loop of each rule while doing less work, and
- * stops a rule it cannot bound with a `scan-limit` error instead of
- * exporting the file unscanned:
+ * matches as a global `exec` loop of each rule while doing less work:
  * - a rule is tried only in the windows before its anchors, the literal
  *   parts every match holds (`src/rules/pattern.ts`); a rule that starts
  *   with a repeated character (`[\w.-]{0,50}?` before a keyword) tries its
  *   tail once per anchor position (`splitMatches`);
- * - a rule of bounded length, or whose unbounded quantifiers are proven
- *   linear, runs as written: its cost is linear in the text;
- * - any other rule (five today) runs capped, with its saturation patterns
- *   and a work limit counted in characters (`scanWorkLimit`); where a
- *   saturation pattern matches or the work would pass the limit, the scan
- *   of that rule on that file stops with `scan-limit`, `ruleId` and `line`.
+ * - a rule whose backtracking tries are proven cheap runs on `RegExp`;
+ * - any other rule (five today) runs on the linear matcher
+ *   (`src/rules/pike.ts`), which counts its steps; past `scanWorkLimit` the
+ *   scan of that rule on that file stops with `scan-limit`, `ruleId` and
+ *   `line`, and the file is refused instead of exported unscanned.
  * Nothing is timed: the same text gives the same findings on every machine.
  */
 import * as path from 'node:path'
 import { extraRules } from '../rules/extra.js'
 import { type BundledRule, type ConvertedRegex, bundledRules } from '../rules/gitleaks.js'
-import { type PatternCap, analyzePattern, scanLimitRepeats } from '../rules/pattern.js'
+import { analyzePattern } from '../rules/pattern.js'
+import { type Program, compileProgram, runProgram, scanProgram } from '../rules/pike.js'
 import { type StockTable, isStockCredentialUrl, stockTable } from '../stock.js'
 import { findCredentialUrls } from './credential-url.js'
 import type { Finding } from './entries.js'
@@ -64,22 +62,17 @@ type CompiledAllowlist = {
 type CompiledRule = {
   id: string
   /**
-   * The pattern, capped when it is unbounded (`src/rules/pattern.ts`):
+   * The pattern as written (`src/rules/pattern.ts`):
    * global for a rule scanned at every position, sticky for a rule tried
    * only at chosen positions.
    */
   regex: RegExp | null
   /** Global: the places a match must contain, each with how far before it the match can start; null to try every position. */
   anchors: { regex: RegExp; before: { min: number; max: number } }[] | null
-  /**
-   * For a capped pattern (`src/rules/pattern.ts`): the saturation patterns,
-   * sticky (where one matches, the capped pattern may differ from the rule,
-   * so the file gets `scan-limit`), and a global regex for the runs of the
-   * character of each unbounded quantifier.
-   */
-  cap: (PatternCap & { saturationRegexes: RegExp[]; runRegexes: (RegExp | null)[] }) | null
+  /** For a rule that runs on the linear matcher (`src/rules/pike.ts`): its program. */
+  program: Program | null
   /** For a split pattern (`src/rules/pattern.ts`): the runs of the prefix character, the sticky tail and its anchors. */
-  split: { runs: RegExp; min: number; max: number; lazy: boolean; tail: RegExp; anchors: RegExp[] } | null
+  split: { runs: RegExp; min: number; max: number; lazy: boolean; tail: RegExp; tailProgram: Program | null; anchors: RegExp[] } | null
   /** The rule as written, not global, for matching a match again to read its groups. */
   groups: RegExp | null
   secretGroup: number
@@ -105,21 +98,15 @@ function compile(regex: ConvertedRegex, mode: '' | 'g' | 'y' = ''): RegExp {
 function compileRule(rule: BundledRule, extra: boolean, plain = false): CompiledRule {
   let regex: RegExp | null = null
   let anchors: CompiledRule['anchors'] = null
-  let cap: CompiledRule['cap'] = null
+  let program: CompiledRule['program'] = null
   let split: CompiledRule['split'] = null
   if (rule.regex && plain) regex = compile(rule.regex, 'g')
   else if (rule.regex) {
     const facts = analyzePattern(rule.regex)
     const flags = rule.regex.flags
     anchors = facts.anchors?.map((anchor) => ({ regex: compile({ source: anchor.source, flags }, 'g'), before: anchor.before })) ?? null
-    const source = facts.cap?.capped ?? rule.regex.source
-    regex = compile({ source, flags }, anchors !== null || facts.cap !== null ? 'y' : 'g')
-    if (facts.cap)
-      cap = {
-        ...facts.cap,
-        saturationRegexes: facts.cap.saturations.map((item) => compile({ source: item, flags }, 'y')),
-        runRegexes: facts.cap.quantifiers.map((item) => (item.source === null ? null : new RegExp(`(?:${item.source})+`, `${item.flags}g`))),
-      }
+    regex = compile(rule.regex, anchors !== null ? 'y' : 'g')
+    if (facts.engine === 'vm') program = compileProgram(rule.regex)
     if (facts.split) {
       const { prefix } = facts.split
       split = {
@@ -128,6 +115,7 @@ function compileRule(rule: BundledRule, extra: boolean, plain = false): Compiled
         max: prefix.max,
         lazy: prefix.lazy,
         tail: compile({ source: facts.split.tail, flags }, 'y'),
+        tailProgram: facts.engine === 'vm' ? compileProgram({ source: facts.split.tail, flags }) : null,
         anchors: facts.split.tailAnchors.map((source) => compile({ source, flags }, 'g')),
       }
     }
@@ -136,7 +124,7 @@ function compileRule(rule: BundledRule, extra: boolean, plain = false): Compiled
     id: rule.id,
     regex,
     anchors,
-    cap,
+    program,
     split,
     groups: rule.regex ? compile(rule.regex) : null,
     secretGroup: rule.secretGroup,
@@ -263,10 +251,20 @@ function trimNewlines(text: string): { value: string; leading: number } {
 }
 
 function secretOf(rule: CompiledRule, match: string): string {
-  const groups = (rule.groups as RegExp).exec(match)
-  if (!groups || groups.length < 2) return match
-  if (rule.secretGroup > 0) return groups[rule.secretGroup] ?? ''
-  return groups.slice(1).find((group) => group !== undefined && group.length > 0) ?? match
+  let groups: (string | undefined)[]
+  if (rule.program) {
+    // The match is matched again on its own, on the linear matcher too: linear in its length.
+    const result = runProgram(rule.program, match, 0, () => true, (position) => position, { steps: 0, limit: Number.POSITIVE_INFINITY })
+    if (!('match' in result)) return match
+    groups = result.match.groups.map((group) => (group ? match.slice(group[0], group[1]) : undefined))
+  } else {
+    const found = (rule.groups as RegExp).exec(match)
+    if (!found) return match
+    groups = found.slice(1)
+  }
+  if (groups.length < 1) return match
+  if (rule.secretGroup > 0) return groups[rule.secretGroup - 1] ?? ''
+  return groups.find((group) => group !== undefined && group.length > 0) ?? match
 }
 
 /** The positions where a global regex matches, each once, ascending; overlapping matches included. */
@@ -335,32 +333,31 @@ type Found = { index: number; text: string }
 type Step = { found: Found } | { limit: number }
 
 /**
- * The work a capped rule may do on one text, in characters its tries may
- * read (spec, Secret scan, "Scan cost"): a fixed part and a part per
- * character of the text. Counted, never timed, so the findings are the same
- * on every machine.
+ * The steps a rule on the linear matcher may take on one text (spec, Secret
+ * scan, "Scan cost"): a fixed part and a part per character. Counted, never
+ * timed, so the findings are the same on every machine.
  */
-export const scanWorkLimit = (length: number) => 2 ** 24 + 64 * length
+export const scanWorkLimit = (length: number) => 2 ** 24 + 256 * length
 
 /**
  * Every non-empty match of a rule, as a global `exec` loop of the rule as
  * written finds them: the leftmost match at or after the end of the one
- * before, an empty match skipped one position ahead. A plain rule (no
- * anchors, no cap) runs exactly that loop; a split rule runs
- * `splitMatches`. Otherwise the rule is tried with its sticky regex only at
- * the positions of its windows: every match starts in one
- * (`src/rules/pattern.ts`).
- *
- * A capped rule counts its work: each try may read `reach` characters, the
- * reach of the capped pattern with the longest runs of the text, and each
- * saturation pattern it runs as much again. A saturation pattern runs only
- * where a run of its character as long as its repetitions is within the
- * longest match. The scan of the rule stops with `limit` where a saturation
- * pattern matches (the capped pattern might not find what the rule would)
- * or where the work would pass `scanWorkLimit`.
+ * before, an empty match skipped one position ahead. A rule without anchors
+ * on `RegExp` runs exactly that loop; a split rule runs `splitMatches`; a
+ * rule on the linear matcher runs `programMatches`. Otherwise the rule is
+ * tried with its sticky regex only at the positions of its windows: every
+ * match starts in one (`src/rules/pattern.ts`).
  */
 function* matchesOf(rule: CompiledRule, text: string, cache: RunCache): Generator<Step> {
   const regex = rule.regex as RegExp
+  if (rule.split) {
+    yield* splitMatches(rule.split, text, cache)
+    return
+  }
+  if (rule.program) {
+    yield* programMatches(rule.program, rule.anchors, text)
+    return
+  }
   if (!regex.sticky) {
     regex.lastIndex = 0
     for (let found = regex.exec(text); found !== null; found = regex.exec(text)) {
@@ -369,54 +366,9 @@ function* matchesOf(rule: CompiledRule, text: string, cache: RunCache): Generato
     }
     return
   }
-  if (rule.split) {
-    yield* splitMatches(rule.split, text, cache)
-    return
-  }
-  const cap = rule.cap
-  const runs = (cap?.quantifiers ?? []).map((quantifier, index) => {
-    const pattern = cap!.runRegexes[index]
-    if (pattern === null) return { longest: Number.POSITIVE_INFINITY, long: { starts: [0], ends: [text.length] } }
-    const list = runList(pattern, text, cache)
-    const long: RunList = { starts: [], ends: [] }
-    let longest = 0
-    list.starts.forEach((first, item) => {
-      const length = list.ends[item] - first
-      longest = Math.max(longest, length)
-      if (length >= quantifier.repeats) {
-        long.starts.push(first)
-        long.ends.push(list.ends[item])
-      }
-    })
-    return { longest, long }
-  })
-  const reach = cap ? Math.min(cap.maxLength, cap.reach(runs.map((item) => item.longest))) : 0
-  const limit = scanWorkLimit(text.length)
-  let work = 0
   let next = 0
   for (const [first, last] of windowsOf(rule.anchors, text)) {
     for (let start = Math.max(first, next); start <= last; start = next) {
-      if (cap) {
-        const read = Math.min(reach, text.length - start) + 1
-        work += read
-        if (work > limit) {
-          yield { limit: start }
-          return
-        }
-        for (let index = 0; index < runs.length; index++) {
-          // A long run overlapping [start, start + maxLength): the first one ending after `start`.
-          const long = runs[index].long
-          const near = lowerBound(long.ends, start + 1)
-          if (near >= long.starts.length || long.starts[near] >= start + cap.maxLength) continue
-          work += read
-          const saturation = cap.saturationRegexes[index]
-          saturation.lastIndex = start
-          if (work > limit || saturation.test(text)) {
-            yield { limit: start }
-            return
-          }
-        }
-      }
       regex.lastIndex = start
       const found = regex.exec(text)
       if (found === null || found[0] === '') {
@@ -426,6 +378,50 @@ function* matchesOf(rule: CompiledRule, text: string, cache: RunCache): Generato
       next = found.index + found[0].length
       yield { found: { index: found.index, text: found[0] } }
     }
+  }
+}
+
+/**
+ * The matches of a rule on the linear matcher, in the order of `matchesOf`.
+ * A match starts only in a window (the whole text without anchors). The
+ * steps of every run on the text count against `scanWorkLimit`; past it the
+ * scan of the rule stops with `limit`.
+ */
+function* programMatches(program: Program, anchors: CompiledRule['anchors'], text: string): Generator<Step> {
+  const windows = windowsOf(anchors, text)
+  // Merged, ascending windows: a start is allowed when it is inside one.
+  const starts: number[] = []
+  const ends: number[] = []
+  for (const [first, last] of anchors === null ? windows : [...windows].sort((left, right) => left[0] - right[0])) {
+    if (ends.length > 0 && first <= ends[ends.length - 1] + 1) ends[ends.length - 1] = Math.max(ends[ends.length - 1], last)
+    else {
+      starts.push(first)
+      ends.push(last)
+    }
+  }
+  const nextStart = (position: number): number => {
+    const index = lowerBound(ends, position)
+    return index >= starts.length ? Number.POSITIVE_INFINITY : Math.max(starts[index], position)
+  }
+  const canStart = (position: number) => nextStart(position) === position
+  const work = { steps: 0, limit: scanWorkLimit(text.length) }
+  let next = 0
+  for (;;) {
+    const from = nextStart(next)
+    if (from > text.length) return
+    const result = scanProgram(program, text, from, canStart, nextStart, work)
+    if ('limit' in result) {
+      yield { limit: result.limit }
+      return
+    }
+    if ('none' in result) return
+    const { start, end } = result.match
+    if (end === start) {
+      next = start + 1
+      continue
+    }
+    next = end
+    yield { found: { index: start, text: text.slice(start, end) } }
   }
 }
 
@@ -442,12 +438,20 @@ function* splitMatches(split: NonNullable<CompiledRule['split']>, text: string, 
   if (positions.length === 0) return
   const runs = runList(split.runs, text, cache)
   const tails = new Map<number, number>()
+  const work = { steps: 0, limit: scanWorkLimit(text.length) }
+  /** Where the tail matched at `position` ends: -1 for no match, -2 past the work limit (linear matcher only). */
   const tailEnd = (position: number): number => {
     let end = tails.get(position)
     if (end === undefined) {
-      split.tail.lastIndex = position
-      const found = split.tail.exec(text)
-      end = found === null || found[0] === '' ? -1 : position + found[0].length
+      if (split.tailProgram) {
+        const only = (at: number) => at === position
+        const result = scanProgram(split.tailProgram, text, position, only, (at) => (at <= position ? position : Number.POSITIVE_INFINITY), work)
+        end = 'limit' in result ? -2 : 'match' in result && result.match.end > position ? result.match.end : -1
+      } else {
+        split.tail.lastIndex = position
+        const found = split.tail.exec(text)
+        end = found === null || found[0] === '' ? -1 : position + found[0].length
+      }
       tails.set(position, end)
     }
     return end
@@ -460,8 +464,12 @@ function* splitMatches(split: NonNullable<CompiledRule['split']>, text: string, 
       const first = lowerBound(positions, start + split.min)
       const last = lowerBound(positions, Math.min(start + split.max, runEnd) + 1) - 1
       let end = -1
-      if (split.lazy) for (let index = first; index <= last && end < 0; index++) end = tailEnd(positions[index])
-      else for (let index = last; index >= first && end < 0; index--) end = tailEnd(positions[index])
+      if (split.lazy) for (let index = first; index <= last && end === -1; index++) end = tailEnd(positions[index])
+      else for (let index = last; index >= first && end === -1; index--) end = tailEnd(positions[index])
+      if (end === -2) {
+        yield { limit: start }
+        return
+      }
       if (end < 0) {
         next = start + 1
         continue
@@ -533,7 +541,8 @@ const credentialUrlMessage =
 const yarnAuthMessage =
   '.yarnrc.yml sets npmAuthToken or npmAuthIdent. A template does not carry registry auth, whatever the value: remove the setting and commit.'
 
-const scanLimitMessage = `The secret scan stops a rule at a fixed limit, so that its time stays bounded: from this line, the rule would read a run of more than ${scanLimitRepeats} characters it repeats, or more text than its work limit for this file. The file is refused rather than exported unscanned. Break up the long text or remove the file from the commit.`
+const scanLimitMessage =
+  'The secret scan counts the work of each rule, so that its time stays bounded, and this rule reached its limit for this file at this line. The file is refused rather than exported unscanned. Break up or shorten the text around this line, or remove the file from the commit.'
 
 /**
  * The bundled and extra rule matches in one text file, as `secret` findings
@@ -546,7 +555,7 @@ export function scanSecrets(filePath: string, text: string, rules?: SecretRules)
 
 /**
  * The reference for tests: `scanSecrets` with every rule run as a global
- * `exec` loop at every position (no anchors, no split, no cap), as before
+ * `exec` loop at every position (no anchors, no split, no linear matcher), as before
  * the cost bound. Its time is not bounded; never call it on exported files.
  */
 export function scanSecretsReference(filePath: string, text: string, rules?: SecretRules): Finding[] {

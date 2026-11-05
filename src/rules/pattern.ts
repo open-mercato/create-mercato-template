@@ -12,15 +12,17 @@
  *   where the anchor matches, so the scan tries the rule only there, and
  *   finds exactly the matches a scan of every position finds.
  *
- * - `cap`: for an unbounded pattern whose quantifiers are not all proven
- *   linear, the capped pattern, its saturation patterns and its reach.
+ * - `engine`: `regexp` when one backtracking try is proven cheap (bounded
+ *   length with at most `maxWays` ways, or unbounded quantifiers proven
+ *   linear), else `vm`: the rule runs on the linear matcher of
+ *   `src/rules/pike.ts`.
  * - `split`: for a pattern that starts with a repeated character before its
  *   anchors, the prefix and the tail.
  *
  * The reader covers the subset that `scripts/build-secret-rules.mts` emits
  * and the extra rules use. Anything else (a backreference, a construct it
  * does not know) is a `PatternError`. The rules build and a test check that
- * every bundled and extra rule reads, so the scan never meets one.
+ * every bundled and extra rule reads and compiles, so the scan never meets one.
  */
 import type { ConvertedRegex } from './gitleaks.js'
 
@@ -442,43 +444,6 @@ function add(left: Bounds, right: Bounds): Bounds {
   return { min: left.min + right.min, max: left.max + right.max }
 }
 
-// ---------------------------------------------------------------------------
-// Capping: an unbounded quantifier `{n,}` becomes `{n,n+K}`. The capped
-// pattern finds the same match at a position as the original whenever no
-// way of matching there repeats an unbounded quantifier `n+K` times; the
-// saturation patterns, one per unbounded quantifier, match at a position
-// exactly when some way of matching there gets that far. So the scan runs
-// the capped pattern, of bounded length, where no saturation pattern
-// matches, and reports `scan-limit` where one does.
-// ---------------------------------------------------------------------------
-
-/** The repetitions an unbounded quantifier gets beyond its minimum. */
-export const scanLimitRepeats = 4096
-
-function quantifier(min: number, max: number, lazy: boolean): string {
-  const text = min === max ? `{${min}}` : `{${min},${Number.isFinite(max) ? max : ''}}`
-  return lazy ? `${text}?` : text
-}
-
-/** Source of a node with every unbounded quantifier capped; groups keep their kind, so group numbers stay. */
-function capped(source: string, node: Node): string {
-  switch (node.kind) {
-    case 'char':
-    case 'assert':
-      return source.slice(node.start, node.end)
-    case 'seq':
-      return node.items.map((item) => capped(source, item)).join('')
-    case 'alt':
-      return node.branches.map((branch) => capped(source, branch)).join('|')
-    case 'group':
-      return `${node.open}${capped(source, node.child)})`
-    case 'repeat': {
-      const max = Number.isFinite(node.max) ? node.max : node.min + scanLimitRepeats
-      return `${capped(source, node.child)}${quantifier(node.min, max, node.lazy)}`
-    }
-  }
-}
-
 /** True when the node holds an unbounded quantifier. */
 function unbounded(node: Node): boolean {
   switch (node.kind) {
@@ -493,75 +458,6 @@ function unbounded(node: Node): boolean {
     default:
       return false
   }
-}
-
-/**
- * The saturation patterns of the unbounded quantifiers below `node`: for each,
- * the part of the pattern up to it (only the branch that holds it, earlier
- * repetitions of an enclosing bounded quantifier from none to all but one),
- * with the quantifier itself repeated exactly `n+K` times. Capturing and
- * named groups become non-capturing; flag groups keep their flags.
- */
-function saturations(source: string, node: Node): string[] {
-  switch (node.kind) {
-    case 'seq': {
-      const found: string[] = []
-      node.items.forEach((item, index) => {
-        const before = node.items
-          .slice(0, index)
-          .map((other) => capped(source, other))
-          .join('')
-        for (const tail of saturations(source, item)) found.push(`${before}${tail}`)
-      })
-      return found
-    }
-    case 'alt':
-      return node.branches.flatMap((branch) => saturations(source, branch))
-    case 'group': {
-      if (node.look) {
-        if (unbounded(node.child)) throw new PatternError(`an unbounded quantifier in a lookaround at offset ${node.start}`)
-        return []
-      }
-      const open = /^\((?:\?<[A-Za-z_][A-Za-z0-9_]*>|\?:|$)/.test(node.open) ? '(?:' : node.open
-      return saturations(source, node.child).map((inner) => `${open}${inner})`)
-    }
-    case 'repeat': {
-      if (!Number.isFinite(node.max)) {
-        if (unbounded(node.child)) throw new PatternError(`nested unbounded quantifiers at offset ${node.start}`)
-        return [`(?:${capped(source, node.child)}){${node.min + scanLimitRepeats}}`]
-      }
-      const inner = saturations(source, node.child)
-      if (inner.length === 0) return []
-      const earlier = node.max > 1 ? `(?:${capped(source, node.child)}){0,${node.max - 1}}` : ''
-      return inner.map((tail) => `${earlier}${tail}`)
-    }
-    default:
-      return []
-  }
-}
-
-/**
- * The capped form of an unbounded pattern that is not linear (spec, Secret
- * scan, "Scan cost").
- */
-export type PatternCap = {
-  capped: string
-  /** One per unbounded quantifier, in the order of `quantifiers`. */
-  saturations: string[]
-  /**
-   * The unbounded quantifiers: the character a repetition matches (source
-   * and flags, for finding its runs in a text), and the repetitions of its
-   * saturation pattern. `null` source: not a single character.
-   */
-  quantifiers: { source: string | null; flags: string; repeats: number }[]
-  /** The longest match of the capped pattern. */
-  maxLength: number
-  /**
-   * The longest text one try of the capped pattern can read when each
-   * unbounded quantifier repeats at most `runs[i]` times (the longest run
-   * of its character in the text): the work of one try.
-   */
-  reach: (runs: number[]) => number
 }
 
 // ---------------------------------------------------------------------------
@@ -579,7 +475,8 @@ export type PatternCap = {
 // A quantifier at the end of the pattern (only parts that always succeed
 // after it) needs neither: the first try that reaches it matches, and the
 // next try starts after the match. A pattern whose unbounded quantifiers are
-// all linear is scanned as written; any other is capped (above).
+// all linear is scanned as written with `RegExp`; any other runs on the
+// linear matcher of `src/rules/pike.ts`.
 // ---------------------------------------------------------------------------
 
 const wordSet = (): CharSet => ({ ascii: asciiOf('\\w', false), high: 'none' })
@@ -721,44 +618,6 @@ function linear(source: string, root: Node): boolean {
   return visit(root, [], false)
 }
 
-/** The unbounded quantifiers, in the order `saturations` lists them. */
-function unboundedQuantifiers(node: Node): (Node & { kind: 'repeat' })[] {
-  switch (node.kind) {
-    case 'seq':
-      return node.items.flatMap(unboundedQuantifiers)
-    case 'alt':
-      return node.branches.flatMap(unboundedQuantifiers)
-    case 'group':
-      return node.look ? [] : unboundedQuantifiers(node.child)
-    case 'repeat':
-      return Number.isFinite(node.max) ? unboundedQuantifiers(node.child) : [node]
-    default:
-      return []
-  }
-}
-
-/** The longest match with the unbounded quantifier `i` repeating at most `min(runs[i], its cap)` times. */
-function reachOf(node: Node, runs: number[], counter: { next: number }): number {
-  switch (node.kind) {
-    case 'char':
-      return 1
-    case 'assert':
-      return 0
-    case 'group':
-      return node.look ? 0 : reachOf(node.child, runs, counter)
-    case 'seq':
-      return node.items.reduce((sum, item) => sum + reachOf(item, runs, counter), 0)
-    case 'alt':
-      return Math.max(...node.branches.map((branch) => reachOf(branch, runs, counter)))
-    case 'repeat': {
-      if (Number.isFinite(node.max)) return node.max * reachOf(node.child, runs, counter)
-      const index = counter.next++
-      const child = reachOf(node.child, runs, { next: Number.POSITIVE_INFINITY })
-      return Math.min(node.min + scanLimitRepeats, Math.max(node.min, runs[index] ?? Number.POSITIVE_INFINITY)) * child
-    }
-  }
-}
-
 /**
  * A pattern that is a repeated character `c{min,max}` (lazy or greedy, max
  * bounded) followed by a tail whose anchors start it: a match starts at `s`
@@ -777,33 +636,76 @@ export type PatternSplit = {
 /**
  * `maxLength`: see the top of the file. `anchors`: every match holds one of
  * them (one per branch of a top-level alternation), or null when the
- * pattern has none to prove. `cap`: for an unbounded pattern that is not
- * linear (below). `split`: see `PatternSplit`.
+ * pattern has none to prove. `engine`: `regexp` when a backtracking try is
+ * proven cheap (bounded length with few ways to match, or linear unbounded
+ * quantifiers), else `vm` (`src/rules/pike.ts`); for a split pattern this
+ * is about its tail. `split`: see `PatternSplit`.
  */
 export type PatternFacts = {
   maxLength: number | null
   anchors: PatternAnchor[] | null
-  cap: PatternCap | null
+  engine: 'regexp' | 'vm'
   split: PatternSplit | null
 }
 
 /**
- * The split of a pattern, when it has the shape `PatternSplit` describes.
- * A second repeat of the same character, lazy or greedy like the first, at
- * the start of a group right after it (`[\w.-]{0,50}?(?i:[\w.-]{0,50}?...)`)
- * joins the prefix: with both lazy the tail is tried at the nearest anchor
- * position first, with both greedy at the farthest, as for one repeat.
+ * The most ways one backtracking try of a node can go on past one
+ * character, an upper bound: a repetition `{min,max}` counts its
+ * `max - min + 1` lengths and a nested or sequential choice multiplies,
+ * except that a repetition of one character followed by a part that must
+ * start with a character outside it counts as one (going back inside it
+ * fails at once on that part). `follow` is the first character of what
+ * comes after the node, or null when unknown. An unbounded repetition
+ * counts as one, so this is used together with `linear`.
  */
-function splitOf(source: string, root: Node): PatternSplit | null {
+function ways(node: Node, follow: Edge | null): number {
+  const cap = (value: number) => Math.min(value, Number.MAX_VALUE)
+  switch (node.kind) {
+    case 'char':
+    case 'assert':
+      return 1
+    case 'group':
+      return node.look ? 1 : ways(node.child, follow)
+    case 'seq': {
+      let product = 1
+      let after = follow
+      for (let index = node.items.length - 1; index >= 0; index--) {
+        const item = node.items[index]
+        product = cap(product * ways(item, after))
+        const edge = edgeOf(item, 'first')
+        after = edge.nullable ? (after === null ? null : { set: union(edge.set, after.set), nullable: after.nullable }) : edge
+      }
+      return product
+    }
+    case 'alt':
+      return node.branches.reduce((sum, branch) => cap(sum + ways(branch, follow)), 0)
+    case 'repeat': {
+      if (node.child.kind === 'char' && follow !== null && !follow.nullable && disjoint(follow.set, node.child.set)) return 1
+      const child = ways(node.child, null)
+      if (!Number.isFinite(node.max)) return child
+      let total = 0
+      for (let count = node.min; count <= node.max && total < Number.MAX_VALUE; count++) total = cap(total + child ** count)
+      return total
+    }
+  }
+}
+
+/**
+ * The most ways a backtracking try may take before the pattern runs on the
+ * linear matcher instead: with at most this many ways, each at most the
+ * longest match long, one try stays cheap.
+ */
+export const maxWays = 1_000_000
+
+function splitOf(source: string, flags: string, root: Node): PatternSplit | null {
   if (root.kind !== 'seq' || root.items.length < 2) return null
   const first = root.items[0]
   if (first.kind !== 'repeat' || !Number.isFinite(first.max) || first.child.kind !== 'char') return null
   const child = first.child
   let min = first.min
   let max = first.max
-  let rest = root.items.slice(1)
-  let tail = source.slice(rest[0].start, root.end)
-  const next = rest[0]
+  const next = root.items[1]
+  let tail = source.slice(next.start, root.end)
   if (next.kind === 'group' && !next.look && next.child.kind === 'seq' && next.child.items.length > 1) {
     const inner = next.child.items[0]
     if (
@@ -819,10 +721,12 @@ function splitOf(source: string, root: Node): PatternSplit | null {
       min += inner.min
       max += inner.max
       tail = `${next.open}${source.slice(innerRest[0].start, next.child.end)})${source.slice(next.end, root.end)}`
-      rest = [{ kind: 'group', open: next.open, capture: next.capture, look: false, child: { kind: 'seq', items: innerRest, start: innerRest[0].start, end: next.child.end }, start: next.start, end: next.end }, ...rest.slice(1)]
     }
   }
-  const anchors = anchorsOf(source, { kind: 'seq', items: rest, start: rest[0].start, end: root.end }, { min: 0, max: 0 }, (text) => text)
+  // The anchors of the tail are read from the tail's own source, so a part
+  // the merge removed can never be one.
+  const tailRoot = parse(tail, flags)
+  const anchors = anchorsOf(tail, tailRoot, { min: 0, max: 0 }, (text) => text)
   if (anchors === null || anchors.some((anchor) => anchor.before.max !== 0)) return null
   return {
     prefix: { source: source.slice(child.start, child.end), flags: child.ignoreCase ? 'i' : '', min, max, lazy: first.lazy },
@@ -845,24 +749,17 @@ export function analyzePattern(regex: ConvertedRegex): PatternFacts {
   looks(root)
   const { max } = lengths(root)
   const anchors = anchorsOf(regex.source, root, { min: 0, max: 0 }, (text) => text)
-  if (Number.isFinite(max)) return { maxLength: max, anchors, cap: null, split: splitOf(regex.source, root) }
-  if (linear(regex.source, root)) return { maxLength: null, anchors, cap: null, split: splitOf(regex.source, root) }
-  const cappedSource = capped(regex.source, root)
-  const quantifiers = unboundedQuantifiers(root).map((node) => ({
-    source: node.child.kind === 'char' ? regex.source.slice(node.child.start, node.child.end) : null,
-    flags: node.child.kind === 'char' && node.child.ignoreCase ? 'i' : '',
-    repeats: node.min + scanLimitRepeats,
-  }))
-  return {
-    maxLength: null,
-    anchors,
-    cap: {
-      capped: cappedSource,
-      saturations: saturations(regex.source, root),
-      quantifiers,
-      maxLength: lengths(parse(cappedSource, regex.flags)).max,
-      reach: (runs) => reachOf(root, runs, { next: 0 }),
-    },
-    split: null,
-  }
+  const split = splitOf(regex.source, regex.flags, root)
+  // A split rule tries only its tail with `RegExp`; its prefix is walked by the scan.
+  const tried = split ? parse(split.tail, regex.flags) : root
+  const cheap = (Number.isFinite(max) || linear(regex.source, root)) && ways(tried, null) <= maxWays
+  return { maxLength: Number.isFinite(max) ? max : null, anchors, engine: cheap ? 'regexp' : 'vm', split }
+}
+
+/** The reader's tree of a pattern, for the linear matcher (`src/rules/pike.ts`). */
+export type PatternNode = Node
+
+/** Parses a converted pattern. Throws `PatternError` on a construct the reader does not know. */
+export function parsePattern(source: string, flags: string): PatternNode {
+  return parse(source, flags)
 }

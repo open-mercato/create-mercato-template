@@ -10,7 +10,8 @@
 // committed): the three of the issue (a base64 data URI with common words, a
 // hex string with every vendor keyword, real `_tsc.js`), the same JavaScript
 // on one line, and the worst cases constructed for the scan (a keyword
-// repeated with no gap, every keyword run together, `curl` lines under the cap).
+// repeated with no gap, every keyword run together, dense input for the
+// rules on the linear matcher).
 const fs = require('node:fs')
 const { scanSecrets, scanSecretsReference } = require('../../dist/policy/secrets.js')
 const { bundledRules } = require('../../dist/rules/gitleaks.js')
@@ -54,7 +55,11 @@ const inputs = {
   'worst: "cohere" with no gap': fill('cohere'),
   'worst: every keyword run together': fill(keywords.join('')),
   'worst: "curl " lines of 1,000 characters': fill(`${'curl '.repeat(200)}\n`),
+  'worst: "kind: secret data: " repeated': fill('kind: secret data: '),
+  'worst: "curl " then carriage returns': `curl ${'\r'.repeat(MB - 6)}\n`,
 }
+// The plain scan never finishes here: 100 carriage returns already take minutes (exponential backtracking).
+const noReference = new Set(['worst: "curl " then carriage returns'])
 
 const reference = process.argv.includes('--reference')
 const time = (scan, text) => {
@@ -67,6 +72,6 @@ console.log(`| Input (1 MB) | Scan${reference ? ' | Reference' : ''} | scan-limi
 console.log(`|---|---|${reference ? '---|' : ''}---|`)
 for (const [name, text] of Object.entries(inputs)) {
   const scan = time(scanSecrets, text)
-  const before = reference ? ` | ${time(scanSecretsReference, text).seconds.toFixed(2)} s` : ''
+  const before = !reference ? '' : noReference.has(name) ? ' | does not finish' : ` | ${time(scanSecretsReference, text).seconds.toFixed(2)} s`
   console.log(`| ${name} | ${scan.seconds.toFixed(2)} s${before} | ${scan.limits} |`)
 }
