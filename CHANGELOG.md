@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- The secret scan no longer slows down on large single-line text (#9). A 1 MB hex string with every vendor keyword took 159 s and now takes 0.21 s. Every 1 MB input measured, the worst cases constructed for the scan included, takes at most 4.3 s. Each rule is tried only near the literal parts every match holds. The five rules whose backtracking cannot be bounded run on a linear-time matcher, so a file with a long run of carriage returns after `curl`, which used to make the scan hang, is now scanned in seconds. The scan finds the same matches as before, with one exception: `curl-auth-header` now matches `X-...-` header names such as `X-Auth-Token` as gitleaks does (Node's regex engine missed them, so they were `generic-api-key` findings or none). The bound and the benchmark (`npm run bench:secret-scan`) are in the guide, under Scan cost.
+- New error `scan-limit`: a rule on the linear matcher (`curl-auth-header`, `curl-auth-user`, `kubernetes-secret-yaml`, `nuget-config-password`, `private-key`) that passes its counted step limit on a file stops `prepare` with exit 1, `ruleId` and the line. The file is refused, never exported unscanned. No input measured comes near the limit.
+
 ## 0.1.0
 
 First release. It needs Node.js 24 or newer and Git 2.40 or newer; `publish` also needs the GitHub CLI `gh`, signed in. The app must be a Git repository with at least one commit.
