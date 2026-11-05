@@ -175,8 +175,95 @@ test('findCredentialUrls finds URLs with a non-empty password, ${...} references
   )
 })
 
+test('findCredentialUrls finds passwords with a raw /, ?, # or @ (issue #10)', () => {
+  const text = [
+    'REDIS_URL=redis://:abc#123@host',
+    'DATABASE_URL="postgres://u:a/b@h/db"',
+    'Q=https://u:p?q@h/x',
+    'AT=postgres://u:p@ss@host/db?to=a@b.com',
+    'EMPTY_USER=redis://:123#abc@host',
+    'REF=postgres://${U}:${P:-a/b}@h/db',
+    'BAD_REF=postgres://u:${P@h/db}',
+    'IN_REF=${DATABASE_URL:=postgres://u:p#q@h}/x@y',
+  ].join('\n')
+  assert.deepEqual(
+    findCredentialUrls(text).map(({ url, password, line }) => ({ url, password, line })),
+    [
+      { url: 'redis://:abc#123@host', password: 'abc#123', line: 1 },
+      { url: 'postgres://u:a/b@h/db', password: 'a/b', line: 2 },
+      { url: 'https://u:p?q@h/x', password: 'p?q', line: 3 },
+      // The last @ before the path ends the userinfo; the @ in the query does not.
+      { url: 'postgres://u:p@ss@host/db?to=a@b.com', password: 'p@ss', line: 4 },
+      // An empty user has no host to give a port to.
+      { url: 'redis://:123#abc@host', password: '123#abc', line: 5 },
+      // A / inside a ${...} reference does not end the authority.
+      { url: 'postgres://${U}:${P:-a/b}@h/db', password: '${P:-a/b}', line: 6 },
+      // A ${ that is not a reference is plain text.
+      { url: 'postgres://u:${P@h/db}', password: '${P', line: 7 },
+      // The userinfo of a URL inside a reference ends with the reference; the URL string runs to the end of the token.
+      { url: 'postgres://u:p#q@h}/x@y', password: 'p#q', line: 8 },
+    ],
+  )
+})
+
+test('findCredentialUrls finds every stock credential URL exactly, in a .env line and a quoted compose line', () => {
+  const urls = [...new Set(Object.values(stockTable.versions).flatMap((entry) => entry.credentialUrls))]
+  assert.ok(urls.length > 0)
+  for (const url of urls) {
+    for (const text of [`DATABASE_URL=${url}`, `      DATABASE_URL: "${url}"`, `x\n- ${url}.`]) {
+      assert.deepEqual(findCredentialUrls(text).map(({ url: found }) => found), [url], text)
+    }
+  }
+})
+
+test('findCredentialUrls does not report URLs with an @ in the path or query and no password', () => {
+  const urls = [
+    'https://registry.npmjs.org/@scope/pkg',
+    'https://registry.npmjs.org:443/@scope/pkg',
+    'https://x.com/?to=a@b.com',
+    'https://x.com:8080/?to=a@b.com',
+    'https://example.com/?u=a:b@c',
+    'https://example.com/path@handle#frag@x',
+    'http://localhost:3000/@user/profile',
+    'http://[::1]:8080/@x',
+    'http://${HOST}:${PORT}/?to=a@b.com',
+    'http://${HOST}:${PORT:-3000}/@scope/pkg',
+    'http://localhost:$PORT/@vite/client',
+    'http://$HOST:$PORT/@scope/pkg',
+    'f"http://localhost:{port}/@vite/client"',
+    'postgres://host:port/db?user=me@x',
+    'https://h:abc/@scope/pkg',
+    'https://user@example.com/a:b@c',
+    'ssh://git@github.com:22/org/repo.git',
+    'git@github.com:org/repo.git',
+    'contact me at a@b.com: https://example.com/a',
+  ]
+  assert.deepEqual(findCredentialUrls(urls.join('\n')), [])
+  // A credential URL after one of them, in the same token or on the same line, is still found.
+  assert.deepEqual(
+    findCredentialUrls('see https://example.com/@a?next=postgres://u:p@h/db and https://x.com/?to=a@b.com').map(({ url }) => url),
+    ['postgres://u:p@h/db'],
+  )
+})
+
 test('findCredentialUrls scans a long line in linear time', () => {
-  for (const line of ['a'.repeat(200_000) + '://', 'f0'.repeat(100_000), `${'x'.repeat(100_000)} postgres://u:p@h/db`]) {
+  for (const line of [
+    'a'.repeat(200_000) + '://',
+    'f0'.repeat(100_000),
+    `${'x'.repeat(100_000)} postgres://u:p@h/db`,
+    'a://'.repeat(50_000),
+    'a://${'.repeat(40_000),
+    'a://${}'.repeat(30_000),
+    'a://${A:-'.repeat(30_000) + '}'.repeat(30_000) + 'x'.repeat(30_000),
+    'a://${A}'.repeat(30_000) + '://u:'.repeat(10_000),
+    `h://h:${'{'.repeat(100_000)}/@x`,
+    `h://h:${'$a1'.repeat(60_000)}x/@x`,
+    'h://u:p/'.repeat(30_000),
+    'h://h:1/@'.repeat(25_000),
+    `h://u:${'/'.repeat(200_000)}`,
+    `h://${'@'.repeat(200_000)}`,
+    `h://${'.'.repeat(200_000)}x`,
+  ]) {
     const started = process.hrtime.bigint()
     findCredentialUrls(line)
     assert.ok(process.hrtime.bigint() - started < 1_000_000_000n, `took too long on a ${line.length}-character line`)
