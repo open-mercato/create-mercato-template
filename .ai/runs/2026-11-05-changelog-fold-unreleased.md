@@ -28,8 +28,12 @@
 
 ## Progress
 
+PR: #20
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` - <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: CHANGELOG
 
 - [x] 1.1 Fold the Unreleased bullets into the 0.1.0 entry and remove the Unreleased section - 5cf95e1
+
+Review fix (om-auto-review-pr nit): reworded the curl-auth-header sentence - 5b23991
