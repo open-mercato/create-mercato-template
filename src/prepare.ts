@@ -9,7 +9,7 @@ import { type EnvReport, buildEnv, envExamplePath, envKeyPattern, sourceManifest
 import type { Finding } from './policy/entries.js'
 import { classifyContent, decodeForScan, isText } from './policy/opaque.js'
 import { type OpenMercato, type RootResult, checkRoot } from './policy/root.js'
-import { scanPath, scanText } from './policy/secrets.js'
+import { type SecretRules, scanPath, scanText } from './policy/secrets.js'
 import { type ImageRecord, type Notice, checkWarnings, notices as reportNotices } from './policy/warnings.js'
 import {
   type Excluded,
@@ -56,6 +56,8 @@ export type PrepareOptions = {
   executor?: Executor
   /** Clock for `createdAt`. */
   now?: () => Date
+  /** The secret rules of the content checks, for tests; the bundled and extra rules by default. */
+  secretRules?: SecretRules
 }
 
 export type AllowFile = { path: string; used: boolean }
@@ -289,7 +291,7 @@ export function prepare(options: PrepareOptions): PrepareResult {
     snapshot.findings.push(...inventory.findings, ...resolved.findings, ...env.findings, ...findings)
     addGenerated(snapshot, envExamplePath, env.content)
     addGenerated(snapshot, manifestPath, serializeManifest(manifest))
-    const content = checkContents(snapshot, allowFiles)
+    const content = checkContents(snapshot, allowFiles, options.secretRules)
     snapshot.findings.push(...content.findings)
     allowFilesReport = content.allowFiles
     const warnings = checkWarnings({ files: snapshot.files, contents: snapshot.contents, excluded: snapshot.excluded })
@@ -359,17 +361,17 @@ const allowFileUnusedMessage = (reason: string) => `--allow-file names a path th
  * path is not in `allowFiles`; `allow-file-unused` for an `allowFiles` path
  * that is not in the snapshot or is not opaque.
  */
-function checkContents(snapshot: Snapshot, allowFiles: readonly string[]): { findings: Finding[]; allowFiles: AllowFile[] } {
+function checkContents(snapshot: Snapshot, allowFiles: readonly string[], rules?: SecretRules): { findings: Finding[]; allowFiles: AllowFile[] } {
   const findings: Finding[] = []
   const opaque = new Set<string>()
   for (const file of snapshot.files) {
     const content = snapshot.contents.get(file.path) as Buffer
-    findings.push(...scanPath(file.path))
+    findings.push(...scanPath(file.path, rules))
     const text = isText(content)
     const kind = classifyContent(file.path, content, text)
     // Media (an image or font whose signature matches) is not scanned as text.
     const scanned = text ? content.toString('utf8') : kind === 'opaque' ? decodeForScan(content) : null
-    if (scanned !== null) findings.push(...scanText(file.path, scanned))
+    if (scanned !== null) findings.push(...scanText(file.path, scanned, rules))
     if (kind !== 'opaque') continue
     opaque.add(file.path)
     if (!allowFiles.includes(file.path)) findings.push({ rule: 'opaque-file', level: 'error', path: file.path, message: opaqueMessage })

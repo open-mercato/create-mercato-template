@@ -41,7 +41,8 @@
     "prepack": "npm run build",
     "prepublishOnly": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/release-gate.mts",
     "prepare": "npm run build",
-    "test:release:local": "node test/release-e2e/local.mts"
+    "test:release:local": "node test/release-e2e/local.mts",
+    "bench:secret-scan": "npm run build && node test/bench/secret-scan.cjs"
   },
   "dependencies": {
     "typescript": "6.0.3",
