@@ -55,23 +55,26 @@ const inputs = {
   'worst: "cohere" with no gap': fill('cohere'),
   'worst: every keyword run together': fill(keywords.join('')),
   'worst: "curl " lines of 1,000 characters': fill(`${'curl '.repeat(200)}\n`),
-  'worst: "kind: secret data: " repeated': fill('kind: secret data: '),
+  'worst: "jira" repeated (atlassian-api-token)': fill('jira'),
+  'worst: "kind: secret data: " repeated, as deploy/secret.yaml': fill('kind: secret data: '),
   'worst: "curl " then carriage returns': `curl ${'\r'.repeat(MB - 6)}\n`,
 }
 // The plain scan never finishes here: 100 carriage returns already take minutes (exponential backtracking).
 const noReference = new Set(['worst: "curl " then carriage returns'])
 
+// A path each input's rules apply to: kubernetes-secret-yaml runs only on YAML files.
+const pathOf = (name) => (name.includes('.yaml') ? 'deploy/secret.yaml' : 'src/blob.ts')
 const reference = process.argv.includes('--reference')
-const time = (scan, text) => {
+const time = (scan, text, name) => {
   const started = process.hrtime.bigint()
-  const findings = scan('src/blob.ts', text)
+  const findings = scan(pathOf(name), text)
   return { seconds: Number(process.hrtime.bigint() - started) / 1e9, limits: findings.filter((finding) => finding.rule === 'scan-limit').length }
 }
 scanSecrets('warm.ts', 'const a = 1\n')
 console.log(`| Input (1 MB) | Scan${reference ? ' | Reference' : ''} | scan-limit findings |`)
 console.log(`|---|---|${reference ? '---|' : ''}---|`)
 for (const [name, text] of Object.entries(inputs)) {
-  const scan = time(scanSecrets, text)
-  const before = !reference ? '' : noReference.has(name) ? ' | does not finish' : ` | ${time(scanSecretsReference, text).seconds.toFixed(2)} s`
+  const scan = time(scanSecrets, text, name)
+  const before = !reference ? '' : noReference.has(name) ? ' | does not finish' : ` | ${time(scanSecretsReference, text, name).seconds.toFixed(2)} s`
   console.log(`| ${name} | ${scan.seconds.toFixed(2)} s${before} | ${scan.limits} |`)
 }

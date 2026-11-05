@@ -35,7 +35,7 @@
  *   parts every match holds (`src/rules/pattern.ts`); a rule that starts
  *   with a repeated character (`[\w.-]{0,50}?` before a keyword) tries its
  *   tail once per anchor position (`splitMatches`);
- * - a rule whose backtracking tries are proven cheap runs on `RegExp`;
+ * - a rule whose backtracking tries have a proven bound runs on `RegExp`;
  * - any other rule (five today) runs on the linear matcher
  *   (`src/rules/pike.ts`), which counts its steps; past `scanWorkLimit` the
  *   scan of that rule on that file stops with `scan-limit`, `ruleId` and

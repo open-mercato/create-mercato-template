@@ -179,9 +179,11 @@ test('the scan finds exactly what a global exec loop of each rule finds, on dens
       else if (kind < 9) text += run('0123456789abcdef', 8 + next(64))
       else text += run(`${alphabet}+/=-_.`, 10 + next(120))
     }
-    const fast = scanSecrets('src/x.ts', text)
+    // Paths that let the path-filtered rules run too (kubernetes-secret-yaml, nuget-config-password).
+    const file = ['src/x.ts', 'deploy/secret.yaml', 'nuget.config'][index % 3]
+    const fast = scanSecrets(file, text)
     if (fast.some((finding) => finding.rule === 'scan-limit')) continue
-    assert.deepEqual(brief(fast), brief(scanSecretsReference('src/x.ts', text)), JSON.stringify(text))
+    assert.deepEqual(brief(fast), brief(scanSecretsReference(file, text)), JSON.stringify({ file, text }))
     compared++
     found += fast.length
   }
@@ -251,6 +253,18 @@ test('regression (review of #19): files that the cap refused or that blew up are
   assert.deepEqual(brief(scanSecrets('README.md', `curl https://example.test -H "Authorization: Bearer ${token}"\n`)), ['secret:curl-auth-header:1'])
   const body = fill(`${randomText('pk', 63)}\n`, 6000)
   assert.deepEqual(brief(scanSecrets('src/key.ts', `x\n-----BEGIN PRIVATE KEY-----\n${body}-----END PRIVATE KEY-----\n`)), ['secret:private-key:2'])
+})
+
+test('a known difference: V8 drops (?i:) for a class in a later alternative; the linear matcher keeps it, as RE2 does', () => {
+  // Node 24: /(?i:x|[a-c])/.exec('B') is null, though (?i:) applies to the whole group.
+  assert.equal(/(?i:x|[a-c])/.exec('B'), null)
+  assert.notEqual(/(?i:[a-c]|x)/.exec('B'), null)
+  // curl-auth-header runs on the linear matcher and has `(?:X-(?:[a-z]+-)?)` in a later alternative inside (?i:):
+  // an X-Auth-Token header is its finding, where the plain scan only had generic-api-key.
+  const token = join(randomText('xa1', 24), '9Zq')
+  const text = `curl https://api.example.test -H "X-Auth-Token: ${token}"\n`
+  assert.deepEqual(brief(scanSecrets('README.md', text)), ['secret:curl-auth-header:1'])
+  assert.deepEqual(brief(scanSecretsReference('README.md', text)), ['secret:generic-api-key:1'])
 })
 
 test('refusal: a rule on the linear matcher that would pass its step limit is scan-limit at the line where it stopped', () => {

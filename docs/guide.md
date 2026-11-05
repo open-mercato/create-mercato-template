@@ -265,27 +265,28 @@ Patterns are Go RE2 syntax and are translated, never passed through: a leading `
 gitleaks runs these patterns on RE2, in linear time. JavaScript backtracks, and 101 rules start with a lazy prefix such as `[\w.-]{0,50}?` before a keyword that a plain scan tries at every position. The scan finds exactly the matches a global `exec` loop of each rule finds, and nothing in it is timed, so the same snapshot gives the same findings on every machine. `src/rules/pattern.ts` reads each pattern; the rules build fails on one it cannot read:
 
 - **Anchors.** A rule is tried only in the window before each place where its anchor matches: a literal part every match holds, at a bounded distance from the match start, such as a keyword or `ghp_` (228 of the 230 pattern rules). A rule that starts with a repeated character before its keyword tries the rest once per keyword position.
-- **Proven-cheap rules run on `RegExp`.** These are rules where one backtracking try is proven cheap: a bounded length with at most 1,000,000 ways to try, or unbounded quantifiers proven linear (the character before the run is never in it, and what follows cannot start inside it, or the run ends the pattern).
+- **Rules with a bounded try run on `RegExp`.** These are rules where one backtracking try has a proven bound: a bounded length with at most 1,000,000 ways to try, or unbounded quantifiers proven linear (the character before the run is never in it, and what follows cannot start inside it, or the run ends the pattern).
 - **The linear matcher.** Five rules run on a Pike VM (`src/rules/pike.ts`), the method RE2 uses: `curl-auth-header`, `curl-auth-user`, `kubernetes-secret-yaml`, `nuget-config-password` and `private-key`. It finds the same match and groups as `exec` in time linear in the text. It counts its steps; past `2^24 + 256` steps per character of the file, the error `scan-limit` refuses the file. No input measured comes near it: the most is about 100 steps per character.
 
-One difference from a plain `exec` loop comes from Node 24 itself. Inside `(?i:...)` or `(?-i:...)`, V8 ignores the modifier for a character class in a later alternative. The linear matcher applies it, as RE2 does. No bundled rule depends on this: the classes affected (`[Aa]tlassian`, `[Ee]tsy`) match the same either way.
+One difference from a plain `exec` loop comes from Node 24 itself. Inside `(?i:...)` or `(?-i:...)`, V8 ignores the modifier for a character class in a later alternative. The linear matcher applies it, as RE2 and gitleaks do. One bundled rule on the linear matcher depends on this: `curl-auth-header`, whose `X-...-` header names sit in a later alternative inside `(?i:...)`. So `curl -H "X-Auth-Token: ..."` is now a `curl-auth-header` finding; the plain scan reported it as `generic-api-key`, or not at all for an upper-case header name. On `RegExp`, `atlassian-api-token` and `etsy-access-token` have such classes too, but theirs (`[Aa]`, `[Ee]`) match the same either way.
 
-The bound, measured with `npm run bench:secret-scan` (Node 24, one Xeon Skylake core, 1 MB each). Add `-- --reference` to time the plain scan as well.
+The bound, measured with `npm run bench:secret-scan` (Node 24, one Xeon Skylake core, 1 MB each, each input on a path its rules apply to). Add `-- --reference` to time the plain scan as well. Times vary by about 20% between runs.
 
 | Input (1 MB) | Before | Now |
 |---|---|---|
-| base64 data URI with common words | 0.73 s | 0.25 s |
-| hex string with every vendor keyword | 133 s | 0.15 s |
-| real `_tsc.js` | 0.74 s | 0.25 s |
-| real `_tsc.js` on one line | 0.75 s | 0.23 s |
-| worst constructed: `key` repeated with no gap | 6.0 s | 1.1 s |
-| worst constructed: `cohere` repeated with no gap | 139 s | 0.78 s |
-| worst constructed: every keyword run together | 124 s | 0.70 s |
-| worst constructed: `curl` lines of 1,000 characters | 7.4 s | 2.9 s |
-| worst constructed: `kind: secret data: ` repeated | 0.17 s | 0.34 s |
-| worst constructed: `curl ` and then carriage returns | does not finish (60 of them take 71 s) | 3.6 s |
+| base64 data URI with common words | 1.2 s | 0.49 s |
+| hex string with every vendor keyword | 159 s | 0.21 s |
+| real `_tsc.js` | 0.78 s | 0.25 s |
+| real `_tsc.js` on one line | 0.78 s | 0.23 s |
+| worst constructed: `key` repeated with no gap | 6.1 s | 1.1 s |
+| worst constructed: `cohere` repeated with no gap | 163 s | 0.83 s |
+| worst constructed: every keyword run together | 126 s | 0.72 s |
+| worst constructed: `curl` lines of 1,000 characters | 7.7 s | 2.9 s |
+| worst constructed: `jira` repeated (`atlassian-api-token`) | 4.4 s | 4.3 s |
+| worst constructed: `kind: secret data: ` repeated, as a `.yaml` file | 1.7 s | 3.8 s |
+| worst constructed: `curl ` and then carriage returns | does not finish (60 of them take 71 s) | 3.7 s |
 
-On the worst input constructed for it, the slowest single rule takes 1.9 s per MB. The sum of every rule's own worst case is 55 s per MB, a ceiling no text reaches, since one text cannot be the worst case of every rule at once.
+The slowest input found is the `jira` row: 4.3 s per MB, for one rule. A rule on the linear matcher can never take more than its step limit. The time per MB of a rule on `RegExp` is measured, not proven: its tries are bounded, and the inputs above are the worst constructed for them.
 
 #### Updating the rules
 

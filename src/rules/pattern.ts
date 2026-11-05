@@ -12,9 +12,9 @@
  *   where the anchor matches, so the scan tries the rule only there, and
  *   finds exactly the matches a scan of every position finds.
  *
- * - `engine`: `regexp` when one backtracking try is proven cheap (bounded
- *   length with at most `maxWays` ways, or unbounded quantifiers proven
- *   linear), else `vm`: the rule runs on the linear matcher of
+ * - `engine`: `regexp` when one backtracking try has a proven bound (a
+ *   bounded length with at most `maxWays` ways, or unbounded quantifiers
+ *   proven linear; the time per MB is measured, not proven), else `vm`: the rule runs on the linear matcher of
  *   `src/rules/pike.ts`.
  * - `split`: for a pattern that starts with a repeated character before its
  *   anchors, the prefix and the tail.
@@ -637,7 +637,7 @@ export type PatternSplit = {
  * `maxLength`: see the top of the file. `anchors`: every match holds one of
  * them (one per branch of a top-level alternation), or null when the
  * pattern has none to prove. `engine`: `regexp` when a backtracking try is
- * proven cheap (bounded length with few ways to match, or linear unbounded
+ * proven bounded (bounded length with few ways to match, or linear unbounded
  * quantifiers), else `vm` (`src/rules/pike.ts`); for a split pattern this
  * is about its tail. `split`: see `PatternSplit`.
  */
