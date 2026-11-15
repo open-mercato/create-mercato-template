@@ -51,6 +51,8 @@ From `src/stock.ts` (`matchStock`, `isStockValue`, `newestStock`), `src/policy/e
 
 ## Progress
 
+PR: #21
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Help text
@@ -63,3 +65,5 @@ From `src/stock.ts` (`matchStock`, `isStockValue`, `newestStock`), `src/policy/e
 - [x] 2.2 Guide: version note, try-`main` section, retry sentence — 94027de
 - [x] 2.3 Guide: what an Open Mercato release the stock table lacks does to `prepare` — 80e8897, c077da8
 - [x] 2.4 AGENTS.md: status sentence after the release — eba84b0
+
+Review (om-auto-review-pr): no findings; GitHub refuses a self-approval, so the report is a PR comment.
