@@ -55,7 +55,7 @@ From `src/stock.ts` (`matchStock`, `isStockValue`, `newestStock`), `src/policy/e
 
 ### Phase 1: Help text
 
-- [ ] 1.1 Remove the pre-release status line from the help and add a test
+- [x] 1.1 Remove the pre-release status line from the help and add a test — 09d2565
 
 ### Phase 2: Docs
 
