@@ -54,8 +54,6 @@ const versionFlags = ['--version', '-v']
 
 export const help = `Save an Open Mercato app as a clean GitHub template repository.
 
-Status: in development. Nothing is published to npm yet.
-
   npx create-mercato-template prepare [<app>] --out <dir> [--include-uncommitted]
       [--allow-file <path>]... [--keep-env <KEY>]... [--json]
   npx create-mercato-template publish --from <dir> --repo <owner/name> (--public | --private)
