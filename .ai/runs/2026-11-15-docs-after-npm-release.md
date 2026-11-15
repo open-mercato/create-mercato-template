@@ -59,7 +59,7 @@ From `src/stock.ts` (`matchStock`, `isStockValue`, `newestStock`), `src/policy/e
 
 ### Phase 2: Docs
 
-- [ ] 2.1 README: npm form as the main way, short section for trying `main` from GitHub
-- [ ] 2.2 Guide: version note, try-`main` section, retry sentence
-- [ ] 2.3 Guide: what an Open Mercato release the stock table lacks does to `prepare`
-- [ ] 2.4 AGENTS.md: status sentence after the release
+- [x] 2.1 README: npm form as the main way, short section for trying `main` from GitHub — 96c2174
+- [x] 2.2 Guide: version note, try-`main` section, retry sentence — 94027de
+- [x] 2.3 Guide: what an Open Mercato release the stock table lacks does to `prepare` — 80e8897, c077da8
+- [x] 2.4 AGENTS.md: status sentence after the release — eba84b0
