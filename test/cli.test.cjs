@@ -49,6 +49,8 @@ test('--help and no arguments print usage that names every command', () => {
     assert.equal(result.stderr, '')
     for (const command of commands) assert.match(result.stdout, new RegExp(`create-mercato-template ${command}`))
     assert.doesNotMatch(result.stdout, /not implemented yet|\(planned\)/)
+    // The package is on npm: the help names no pre-release status.
+    assert.doesNotMatch(result.stdout, /in development|not on npm|Nothing is published/i)
     assert.match(result.stdout, /Exit codes: 0 done, 1 a check failed, 2 usage error/)
   }
 })

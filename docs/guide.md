@@ -1,6 +1,6 @@
 # Usage and development guide
 
-> **Version 0.1.0.** `--help`, `--version` and the three commands, `prepare`, `publish` and `describe`, work. The package is not on npm yet: until it is, run the commands from GitHub as [Try it before the npm release](#try-it-before-the-npm-release) shows. The examples below use the npm form, `npx create-mercato-template <command>`. The design lives in the [Phase 2 spec](https://github.com/open-mercato/create-mercato-template/blob/main/.ai/specs/2026-10-30-create-mercato-template.md).
+> **Version 0.1.0.** `--help`, `--version` and the three commands, `prepare`, `publish` and `describe`, work. The examples below use the npm form, `npx create-mercato-template <command>`; [Try the `main` branch](#try-the-main-branch) shows how to run the commands from GitHub instead. The design lives in the [Phase 2 spec](https://github.com/open-mercato/create-mercato-template/blob/main/.ai/specs/2026-10-30-create-mercato-template.md).
 
 ## Command reference
 
@@ -186,26 +186,32 @@ With `--json` the envelope adds `path` (`templates/<owner>/<repo>.yml`), `yaml` 
 | 3 | GitHub auth missing (`gh` not installed or `gh auth status` fails). `publish` only. |
 | 4 | A GitHub step failed. The JSON says which steps finished. `publish` only. |
 
-## Try it before the npm release
-
-Requirements:
+## Requirements
 
 - Node.js 24 or newer.
 - Git 2.40 or newer, for `prepare` and `publish`.
 - For `publish`: the GitHub CLI `gh`, signed in (`gh auth login`). A snapshot with `.github/workflows/*` also needs the `workflow` scope (`gh auth refresh -s workflow`).
 - The app: an Open Mercato app on Yarn 4, at the top level of a Git repository with at least one commit. `prepare` reads the committed files, so commit your changes first (or pass `--include-uncommitted`).
 
-The package is not on npm yet. Run the commands from the `main` branch of this repository; npm downloads it, installs its build dependencies and compiles it on the first run:
+Run the commands in the app directory:
 
 ```bash
 cd my-app
-npx --package github:open-mercato/create-mercato-template create-mercato-template prepare --out ../my-template
+npx create-mercato-template prepare --out ../my-template
 # Review ../my-template/report.json and ../my-template/tree.
-npx --package github:open-mercato/create-mercato-template create-mercato-template publish --from ../my-template --repo your-name/my-template --public
-npx --package github:open-mercato/create-mercato-template create-mercato-template describe --from ../my-template
+npx create-mercato-template publish --from ../my-template --repo your-name/my-template --public
+npx create-mercato-template describe --from ../my-template
 ```
 
-Every flag of this guide works the same way. To pin a commit, write `github:open-mercato/create-mercato-template#<sha>`. A `retry` command printed by a failed `publish` names the npm form (`npx create-mercato-template@<version>`); before the npm release, run it with `--package github:open-mercato/create-mercato-template` instead. After the npm release, use `npx create-mercato-template <command>`.
+## Try the `main` branch
+
+To try changes that are not released yet, run the commands from the `main` branch of this repository instead of npm; npm downloads it, installs its build dependencies and compiles it on the first run:
+
+```bash
+npx --package github:open-mercato/create-mercato-template create-mercato-template prepare --out ../my-template
+```
+
+Every command and flag of this guide works the same way. To pin a commit, write `github:open-mercato/create-mercato-template#<sha>`. A `retry` command printed by a failed `publish` names the npm release (`npx create-mercato-template@<version>`); after a run from `main`, replace `create-mercato-template@<version>` in it with `--package github:open-mercato/create-mercato-template create-mercato-template`.
 
 ## Development
 
@@ -253,6 +259,8 @@ npm run stock-table -- --check  # only list them; exit 1 when one is missing
 ```
 
 The script (`scripts/build-stock-table.mts`, not shipped) is incremental: it runs `npm view create-mercato-app versions --json`, downloads only the missing versions with `npm pack <spec> --pack-destination <tmp> --json` and unpacks them with the system `tar`, all with argument arrays. It writes plain ASCII JSON in a fixed order; a test fails when the committed file is not in that format, and another checks the 0.9.0 entry against a copy taken by hand. The weekly `Stock table` workflow (`.github/workflows/stock-table.yml`, also started by hand) runs the `--check` form and fails when npm has a stable version the table lacks; it never runs on pull requests. A maintainer then runs the script, commits the table and releases a patch.
+
+So a released tool knows the stock files of the Open Mercato releases up to the newest one in its table, and no newer. For an app on a newer release, until the table is rebuilt (`npm run stock-table`) and the tool released again, `prepare` adds the `stock-unknown` notice and checks values against every known version: an env value that only the new release ships is emptied in the generated `.env.example` and listed in `env.emptied`; a key that only the new release ships counts as declared env, with an `env-undocumented` warning when neither a comment above it nor the app's `mercato-template.json` describes it; a credential URL that only the new scaffold contains is a `credential-url` error; and a stock `README.md` that only the new release ships is not recognized as stock.
 
 ### Secret rules
 

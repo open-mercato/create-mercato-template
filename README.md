@@ -12,16 +12,15 @@
   <a href="https://github.com/open-mercato/create-mercato-template/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-bc9aff" alt="MIT license" /></a>
 </p>
 
-> **Version 0.1.0 is not on npm yet.** `prepare`, `publish` and `describe` work. Until the npm release, run them from GitHub: see [Try it before the npm release](#try-it-before-the-npm-release).
-
 ```bash
+cd my-app
 npx create-mercato-template prepare --out ../my-template
 # Review ../my-template/report.json and ../my-template/tree.
 npx create-mercato-template publish --from ../my-template --repo your-name/my-template --public
 npx create-mercato-template describe --from ../my-template
 ```
 
-<p align="center"><a href="#what-it-does">What it does</a> · <a href="#try-it-before-the-npm-release">Try it</a> · <a href="#what-is-and-is-not-saved">What is saved</a> · <a href="#in-an-open-mercato-cloud-sandbox">Cloud sandboxes</a> · <a href="#specifications">Specs</a> · <a href="docs/guide.md">Guide</a> · <a href="https://docs.openmercato.com/">Docs</a> · <a href="https://discord.gg/f4qwPtJ3qA">Discord</a></p>
+<p align="center"><a href="#what-it-does">What it does</a> · <a href="#requirements">Requirements</a> · <a href="#what-is-and-is-not-saved">What is saved</a> · <a href="#in-an-open-mercato-cloud-sandbox">Cloud sandboxes</a> · <a href="#specifications">Specs</a> · <a href="docs/guide.md">Guide</a> · <a href="https://docs.openmercato.com/">Docs</a> · <a href="https://discord.gg/f4qwPtJ3qA">Discord</a></p>
 
 ## What it does
 
@@ -33,26 +32,12 @@ npx create-mercato-template describe --from ../my-template
 
 Every command takes `--json` for scripts and agents: one JSON object on stdout, no prompts, and stable exit codes (0 done, 1 a check failed, 2 usage error, 3 GitHub auth missing, 4 a GitHub step failed).
 
-## Try it before the npm release
-
-You need:
+## Requirements
 
 - Node.js 24 or newer;
 - Git 2.40 or newer;
 - for `publish`, the [GitHub CLI](https://cli.github.com/) `gh`, signed in (`gh auth login`);
 - an Open Mercato app on Yarn 4 that is a Git repository with at least one commit. `prepare` reads committed files only, so commit your changes first.
-
-Run the commands from this repository on GitHub. npm downloads and builds it on the first run:
-
-```bash
-cd my-app
-npx --package github:open-mercato/create-mercato-template create-mercato-template prepare --out ../my-template
-# Review ../my-template/report.json and ../my-template/tree.
-npx --package github:open-mercato/create-mercato-template create-mercato-template publish --from ../my-template --repo your-name/my-template --public
-npx --package github:open-mercato/create-mercato-template create-mercato-template describe --from ../my-template
-```
-
-This runs the current `main` branch. After the npm release, use `npx create-mercato-template <command>` instead.
 
 ## What is and is not saved
 
@@ -61,6 +46,16 @@ A template is code only. It holds the committed files of your app at one commit.
 ## In an Open Mercato Cloud sandbox
 
 A sandbox calls `prepare --json` and then either pushes `<out>/tree` with its own GitHub integration, or runs `publish --json --expect <snapshotId>` where `gh` is signed in. No platform credential is passed to the tool. `describe --json` gives the catalog entry for the same snapshot.
+
+## Try the `main` branch
+
+To try changes that are not released yet, run the commands from the `main` branch of this repository instead of npm. npm downloads and builds it on the first run:
+
+```bash
+npx --package github:open-mercato/create-mercato-template create-mercato-template prepare --out ../my-template
+```
+
+`publish` and `describe` work the same way.
 
 ## Specifications
 
